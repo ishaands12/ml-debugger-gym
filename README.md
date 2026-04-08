@@ -29,7 +29,7 @@ Each episode gives the agent a broken ML pipeline — a dataset and training scr
 3. **Evaluate** the model to verify the fix improved accuracy
 4. **Submit a diagnosis** naming the bug and explaining the reasoning
 
-Six bug categories are injected: data leakage, class imbalance, wrong hyperparameters, scaling errors, train/test contamination, and missing value handling errors. Four difficulty levels progress from obvious single bugs to adversarial multi-bug scenarios.
+Three bug categories are injected: **data leakage**, **class imbalance**, and **wrong hyperparameters**. Four difficulty levels progress from obvious single bugs (D1) to adversarial multi-bug scenarios with obfuscated column names (D4).
 
 ---
 
@@ -81,14 +81,15 @@ python -m pytest tests/ -v
 
 | Event | Reward | Condition |
 |-------|--------|-----------|
-| Step penalty | −0.05 | Every step, always |
+| Step penalty | −0.02 | Every step, always |
+| Exploration bonus | +0.05 | First use of each inspect target / first fix attempt |
 | Correct bug type | +0.30 | `submit_diagnosis.bug_type == ground_truth` |
 | Wrong bug type | −0.20 | `submit_diagnosis.bug_type != ground_truth` |
 | Target accuracy reached | +0.50 | `accuracy >= target_accuracy` at submission |
 | Accuracy improvement | `delta × 2.0` | Positive delta on `evaluate_model` |
 | Overfitting penalty | −0.10 | `train_acc − val_acc > 0.15` on evaluate |
 | Timeout | −0.50 | `step >= 15` |
-| LLM explanation quality | 0.0–0.30 | Scored by LLM judge on `submit_diagnosis` |
+| LLM explanation quality | 0.0–0.30 | Scored by LLM judge on `submit_diagnosis` (requires `OPENAI_API_KEY`) |
 
 ---
 
@@ -103,24 +104,56 @@ python -m pytest tests/ -v
 
 ---
 
+## Baseline Performance (gpt-4.1-mini, seed=42)
+
+| Task | Difficulty | Bug | Steps | Result | Total Reward |
+|------|-----------|-----|-------|--------|-------------|
+| debug-easy | 1 | wrong_hyperparameter | 4 | SUCCESS | +0.91 |
+| debug-medium | 2 | class_imbalance | 7 | SUCCESS | +0.83 |
+| debug-hard | 3 | data_leakage | 11 | SUCCESS | +0.84 |
+
+Run the baseline yourself:
+
+```bash
+HF_TOKEN=<your-key> python inference.py
+```
+
+---
+
+## Inference Script
+
+`inference.py` uses the OpenAI-compatible API to run an LLM agent through all three tasks.
+
+| Env Variable | Default | Required |
+|---|---|---|
+| `HF_TOKEN` | — | Yes |
+| `API_BASE_URL` | `https://api.openai.com/v1` | No |
+| `MODEL_NAME` | `gpt-4.1-mini` | No |
+
+Output follows the `[START]` / `[STEP]` / `[END]` format specified by the hackathon submission guidelines.
+
+---
+
 ## File Structure
 
 ```
 ml-debugger-gym/
-├── README.md
-├── Dockerfile
-├── requirements.txt
+├── inference.py            # LLM agent (submission entry point)
 ├── env.py                  # MLDebuggerEnv (OpenEnv BaseEnvironment)
 ├── actions.py              # 5 Pydantic Action models
 ├── observations.py         # Observation + ModelMetrics models
 ├── grader.py               # MLDebuggerRubric (programmatic + LLM scoring)
 ├── dataset_generator.py    # Procedural broken pipeline generation
-├── test_agent.py           # Heuristic test agent (end-to-end sanity check)
+├── client.py               # OpenEnv HTTP client
+├── server/app.py           # FastAPI server (openenv create_app)
+├── openenv.yaml            # OpenEnv metadata
+├── Dockerfile
+├── requirements.txt
+├── test_agent.py           # Heuristic test agent (sanity check)
 ├── demo.py                 # Demo script with argparse CLI
-├── tests/
-│   ├── test_env.py
-│   └── test_grader.py
-└── datasets/               # Pre-generated CSVs (optional)
+└── tests/
+    ├── test_env.py
+    └── test_grader.py
 ```
 
 ---
