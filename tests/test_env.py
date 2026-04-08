@@ -154,14 +154,14 @@ def test_state_method_returns_observation(env):
 
 
 def test_reward_has_exploration_bonus_first_inspect(env):
-    # First inspect of a new target: -0.02 + 0.05 exploration = +0.03
+    # First inspect of a new target: 0.01 base + 0.05 exploration = 0.06
     action = InspectDataAction(action_type="inspect_data", target="shape")
     obs = env.step(action)
-    assert obs.reward == pytest.approx(0.03, abs=1e-3)
+    assert obs.reward == pytest.approx(0.06, abs=1e-3)
 
 
-def test_reward_is_clamped_for_repeated_inspect(env):
-    # Repeated inspect: step penalty (-0.02) clamped to 0.01
+def test_reward_is_base_for_repeated_inspect(env):
+    # Repeated inspect: base only = 0.01
     action = InspectDataAction(action_type="inspect_data", target="shape")
     env.step(action)  # first call
     obs = env.step(action)  # second call

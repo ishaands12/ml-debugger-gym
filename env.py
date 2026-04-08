@@ -55,7 +55,7 @@ class MLDebuggerEnv(BaseEnvironment):
 
     def __init__(self):
         self._rubric = MLDebuggerRubric()
-        super().__init__(rubric=None)  # We handle rewards ourselves
+        super().__init__(rubric=self._rubric)
         self.max_steps = 15
         self._obs: Optional[Observation] = None
         self._ground_truth_bug: Optional[str] = None
@@ -87,7 +87,8 @@ class MLDebuggerEnv(BaseEnvironment):
         self._pipeline = pipeline_data["pipeline"]
         self._ground_truth_bug = pipeline_data["bug_type"]
         self._wrong_submissions = 0
-        self._rubric.reset_episode()
+        self._rubric.set_ground_truth(self._ground_truth_bug)
+        self._reset_rubric()
 
         baseline = self._run_evaluation()
         # For data_leakage: removing the leak DROPS accuracy (that's the point).
@@ -135,15 +136,12 @@ class MLDebuggerEnv(BaseEnvironment):
         result = self._execute_action(action)
         self._obs.last_action_result = result
 
-        reward = self._rubric.forward(action, self)
         done, info = self._check_termination(action)
-
-        if done and info.get("reason") == "timeout":
-            reward -= 0.5
-
         self._obs.done = done
-        self._obs.reward = round(reward, 4)
         self._obs.metadata = info
+
+        # Use openenv rubric API: rubric(action, observation) -> float in (0, 1)
+        self._obs.reward = self.rubric(action, self._obs)
 
         return self._obs
 
