@@ -81,7 +81,7 @@ python -m pytest tests/ -v
 
 | Event | Reward | Condition |
 |-------|--------|-----------|
-| Step penalty | −0.02 | Every step, always |
+| Step penalty | 0.00 (clamped from −0.02) | Every step — penalizes by reducing other rewards |
 | Exploration bonus | +0.05 | First use of each inspect target / first fix attempt |
 | Correct bug type | +0.30 | `submit_diagnosis.bug_type == ground_truth` |
 | Wrong bug type | −0.20 | `submit_diagnosis.bug_type != ground_truth` |
@@ -108,9 +108,9 @@ python -m pytest tests/ -v
 
 | Task | Difficulty | Bug | Steps | Result | Total Reward |
 |------|-----------|-----|-------|--------|-------------|
-| debug-easy | 1 | wrong_hyperparameter | 4 | SUCCESS | +0.91 |
-| debug-medium | 2 | class_imbalance | 7 | SUCCESS | +0.83 |
-| debug-hard | 3 | data_leakage | 11 | SUCCESS | +0.84 |
+| debug-easy | 1 | wrong_hyperparameter | 4 | SUCCESS | 0.93 |
+| debug-medium | 2 | class_imbalance | 2 | SUCCESS | 0.81 |
+| debug-hard | 3 | data_leakage | 9 | SUCCESS | 0.96 |
 
 Run the baseline yourself:
 

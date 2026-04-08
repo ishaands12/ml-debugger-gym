@@ -160,12 +160,12 @@ def test_reward_has_exploration_bonus_first_inspect(env):
     assert obs.reward == pytest.approx(0.03, abs=1e-3)
 
 
-def test_reward_is_negative_for_repeated_inspect(env):
-    # Repeated inspect gives only step penalty
+def test_reward_is_zero_for_repeated_inspect(env):
+    # Repeated inspect: step penalty (-0.02) clamped to 0.0
     action = InspectDataAction(action_type="inspect_data", target="shape")
     env.step(action)  # first call
     obs = env.step(action)  # second call
-    assert obs.reward == pytest.approx(-0.02, abs=1e-3)
+    assert obs.reward == pytest.approx(0.0, abs=1e-3)
 
 
 def test_obs_done_false_initially(env):

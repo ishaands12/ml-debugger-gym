@@ -121,4 +121,5 @@ class MLDebuggerRubric:
             return 0.0
 
     def forward(self, action, state) -> float:
-        return self.programmatic_score(action, state) + self.llm_score(action, state)
+        raw = self.programmatic_score(action, state) + self.llm_score(action, state)
+        return max(0.0, min(1.0, raw))
