@@ -285,11 +285,13 @@ def run_task(task_name: str, difficulty: int, seed: int):
     if obs.done and hasattr(obs, "metadata") and obs.metadata:
         success = obs.metadata.get("reason") == "success"
 
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards) if rewards else "0.00"
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards) if rewards else "0.01"
     step_count = len(rewards)
+    # Task score = last reward (already in strict (0,1) from rubric clamp)
+    score = rewards[-1] if rewards else 0.01
     print(
         f"[END] success={'true' if success else 'false'} "
-        f"steps={step_count} rewards={rewards_str}",
+        f"steps={step_count} score={score:.2f} rewards={rewards_str}",
         flush=True,
     )
 
