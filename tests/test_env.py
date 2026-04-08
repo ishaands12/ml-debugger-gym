@@ -149,7 +149,7 @@ def test_apply_fix_hyperparameter(env):
 
 
 def test_state_method_returns_observation(env):
-    obs = env.state()
+    obs = env.state
     assert isinstance(obs, Observation)
 
 
@@ -169,7 +169,7 @@ def test_reward_is_clamped_for_repeated_inspect(env):
 
 
 def test_obs_done_false_initially(env):
-    obs = env.state()
+    obs = env.state
     assert obs.done is False
 
 

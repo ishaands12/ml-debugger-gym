@@ -128,7 +128,8 @@ class MLDebuggerEnv(BaseEnvironment):
         Returns:
             Updated Observation with reward and done embedded.
         """
-        assert self._obs is not None, "Call reset() before step()"
+        if self._obs is None:
+            self.reset(difficulty=1)
 
         self._obs.step += 1
         result = self._execute_action(action)
@@ -146,8 +147,11 @@ class MLDebuggerEnv(BaseEnvironment):
 
         return self._obs
 
-    def state(self) -> Optional[Observation]:
+    @property
+    def state(self) -> Observation:
         """Return current observation (read-only)."""
+        if self._obs is None:
+            self.reset(difficulty=1)
         return self._obs
 
     # ------------------------------------------------------------------
