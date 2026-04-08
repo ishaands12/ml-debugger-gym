@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-ml-debugger-gym"
+version = "0.1.0"
+description = "ML Experiment Debugger Gym — RL environment for debugging broken ML pipelines"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core]>=0.2.3",
+    "scikit-learn>=1.3.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "pydantic>=2.0.0",
+    "openai>=1.0.0",
+    "imbalanced-learn>=0.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+server = "ml_debugger_gym.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["ml_debugger_gym", "ml_debugger_gym.server"]
+package-dir = { "ml_debugger_gym" = ".", "ml_debugger_gym.server" = "server" }

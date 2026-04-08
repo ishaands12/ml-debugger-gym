@@ -1,21 +1,28 @@
 # actions.py
-from pydantic import BaseModel
-from typing import Literal, Optional, Dict, Any, Union
+from typing import Annotated, Any, Dict, Literal, Optional, Union
+from pydantic import Field
+
+try:
+    from openenv_core import Action as _BaseAction
+    _BASE = _BaseAction
+except ImportError:
+    from pydantic import BaseModel
+    _BASE = BaseModel
 
 
-class InspectDataAction(BaseModel):
-    action_type: Literal["inspect_data"]
+class InspectDataAction(_BASE):
+    action_type: Literal["inspect_data"] = "inspect_data"
     target: Literal["head", "dtypes", "describe", "value_counts", "null_check", "shape"]
     column: Optional[str] = None
 
 
-class RunCodeAction(BaseModel):
-    action_type: Literal["run_code"]
+class RunCodeAction(_BASE):
+    action_type: Literal["run_code"] = "run_code"
     code: str
 
 
-class ApplyFixAction(BaseModel):
-    action_type: Literal["apply_fix"]
+class ApplyFixAction(_BASE):
+    action_type: Literal["apply_fix"] = "apply_fix"
     fix_type: Literal[
         "drop_leaky_column",
         "resample_class_balance",
@@ -27,12 +34,12 @@ class ApplyFixAction(BaseModel):
     parameters: Dict[str, Any] = {}
 
 
-class EvaluateModelAction(BaseModel):
-    action_type: Literal["evaluate_model"]
+class EvaluateModelAction(_BASE):
+    action_type: Literal["evaluate_model"] = "evaluate_model"
 
 
-class SubmitDiagnosisAction(BaseModel):
-    action_type: Literal["submit_diagnosis"]
+class SubmitDiagnosisAction(_BASE):
+    action_type: Literal["submit_diagnosis"] = "submit_diagnosis"
     bug_type: Literal[
         "data_leakage",
         "class_imbalance",
@@ -44,10 +51,14 @@ class SubmitDiagnosisAction(BaseModel):
     explanation: str
 
 
-Action = Union[
-    InspectDataAction,
-    RunCodeAction,
-    ApplyFixAction,
-    EvaluateModelAction,
-    SubmitDiagnosisAction,
+# Discriminated union — the single action type exposed to OpenEnv
+Action = Annotated[
+    Union[
+        InspectDataAction,
+        RunCodeAction,
+        ApplyFixAction,
+        EvaluateModelAction,
+        SubmitDiagnosisAction,
+    ],
+    Field(discriminator="action_type"),
 ]
