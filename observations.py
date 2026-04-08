@@ -3,10 +3,14 @@ from typing import Optional, List, Dict
 from pydantic import BaseModel
 
 try:
-    from openenv_core import Observation as _BaseObs
+    from openenv.core import Observation as _BaseObs
     _BASE = _BaseObs
 except ImportError:
-    _BASE = BaseModel
+    try:
+        from openenv_core import Observation as _BaseObs
+        _BASE = _BaseObs
+    except ImportError:
+        _BASE = BaseModel
 
 
 class ModelMetrics(BaseModel):

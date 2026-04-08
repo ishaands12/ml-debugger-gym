@@ -41,10 +41,20 @@ def rubric():
 
 
 def test_step_penalty_always_applied(rubric):
+    # First inspect of a new target gets exploration bonus: -0.02 + 0.05 = +0.03
     state = FakeState()
     action = InspectDataAction(action_type="inspect_data", target="shape")
     score = rubric.programmatic_score(action, state)
-    assert score == pytest.approx(-0.05, abs=1e-4)
+    assert score == pytest.approx(0.03, abs=1e-4)
+
+
+def test_step_penalty_repeated_inspect(rubric):
+    # Repeated inspect of same target: only step penalty -0.02
+    state = FakeState()
+    action = InspectDataAction(action_type="inspect_data", target="shape")
+    rubric.programmatic_score(action, state)  # first time
+    score = rubric.programmatic_score(action, state)  # second time
+    assert score == pytest.approx(-0.02, abs=1e-4)
 
 
 def test_correct_diagnosis_bonus(rubric):
@@ -55,8 +65,8 @@ def test_correct_diagnosis_bonus(rubric):
         explanation="Found leaky column.",
     )
     score = rubric.programmatic_score(action, state)
-    # -0.05 + 0.3 + 0.5 = 0.75
-    assert score == pytest.approx(0.75, abs=1e-4)
+    # -0.02 + 0.3 + 0.5 = 0.78
+    assert score == pytest.approx(0.78, abs=1e-4)
 
 
 def test_wrong_diagnosis_penalty(rubric):
@@ -67,16 +77,16 @@ def test_wrong_diagnosis_penalty(rubric):
         explanation="Wrong guess.",
     )
     score = rubric.programmatic_score(action, state)
-    # -0.05 - 0.2 = -0.25
-    assert score == pytest.approx(-0.25, abs=1e-4)
+    # -0.02 - 0.2 = -0.22
+    assert score == pytest.approx(-0.22, abs=1e-4)
 
 
 def test_accuracy_improvement_reward(rubric):
     state = FakeState(baseline_acc=0.60, current_acc=0.80)
     action = EvaluateModelAction(action_type="evaluate_model")
     score = rubric.programmatic_score(action, state)
-    # delta = 0.20; delta*2 = 0.40; -0.05 step = 0.35
-    assert score == pytest.approx(0.35, abs=1e-3)
+    # delta = 0.20; delta*2 = 0.40; -0.02 step = 0.38
+    assert score == pytest.approx(0.38, abs=1e-3)
 
 
 def test_no_improvement_evaluate(rubric):
@@ -84,7 +94,7 @@ def test_no_improvement_evaluate(rubric):
     action = EvaluateModelAction(action_type="evaluate_model")
     score = rubric.programmatic_score(action, state)
     # delta = 0, step penalty only
-    assert score == pytest.approx(-0.05, abs=1e-4)
+    assert score == pytest.approx(-0.02, abs=1e-4)
 
 
 def test_overfitting_penalty(rubric):
@@ -93,8 +103,8 @@ def test_overfitting_penalty(rubric):
     state._obs.current_metrics = make_metrics(accuracy=0.80, train_accuracy=0.99)
     action = EvaluateModelAction(action_type="evaluate_model")
     score = rubric.programmatic_score(action, state)
-    # delta*2 = 0.40, -0.05, -0.1 overfitting = 0.25
-    assert score == pytest.approx(0.25, abs=1e-3)
+    # delta*2 = 0.40, -0.02, -0.1 overfitting = 0.28
+    assert score == pytest.approx(0.28, abs=1e-3)
 
 
 def test_correct_diagnosis_but_accuracy_not_met(rubric):
@@ -105,8 +115,8 @@ def test_correct_diagnosis_but_accuracy_not_met(rubric):
         explanation="Found the bug.",
     )
     score = rubric.programmatic_score(action, state)
-    # -0.05 + 0.3 = 0.25 (no +0.5 because accuracy not met)
-    assert score == pytest.approx(0.25, abs=1e-4)
+    # -0.02 + 0.3 = 0.28 (no +0.5 because accuracy not met)
+    assert score == pytest.approx(0.28, abs=1e-4)
 
 
 def test_llm_score_returns_zero_without_client(rubric):
@@ -127,7 +137,43 @@ def test_forward_combines_scores(rubric):
         bug_type="data_leakage",
         explanation="Found leaky column.",
     )
-    # LLM unavailable in test; forward = programmatic only
     rubric.llm_available = False
     result = rubric.forward(action, state)
-    assert result == pytest.approx(0.75, abs=1e-4)
+    assert result == pytest.approx(0.78, abs=1e-4)
+
+
+def test_exploration_bonus_first_fix(rubric):
+    state = FakeState()
+    action = EvaluateModelAction(action_type="evaluate_model")
+    # Trigger fix_attempted bonus via ApplyFixAction
+    from actions import ApplyFixAction
+    fix_action = ApplyFixAction(
+        action_type="apply_fix",
+        fix_type="resample_class_balance",
+        parameters={},
+    )
+    score = rubric.programmatic_score(fix_action, state)
+    # -0.02 + 0.05 first fix bonus = +0.03
+    assert score == pytest.approx(0.03, abs=1e-4)
+
+
+def test_exploration_bonus_not_repeated(rubric):
+    state = FakeState()
+    from actions import ApplyFixAction
+    fix_action = ApplyFixAction(
+        action_type="apply_fix",
+        fix_type="resample_class_balance",
+        parameters={},
+    )
+    rubric.programmatic_score(fix_action, state)  # first fix
+    score = rubric.programmatic_score(fix_action, state)  # second fix
+    assert score == pytest.approx(-0.02, abs=1e-4)  # no bonus
+
+
+def test_reset_episode_clears_exploration(rubric):
+    state = FakeState()
+    action = InspectDataAction(action_type="inspect_data", target="shape")
+    rubric.programmatic_score(action, state)  # adds to seen
+    rubric.reset_episode()
+    score = rubric.programmatic_score(action, state)  # should get bonus again
+    assert score == pytest.approx(0.03, abs=1e-4)

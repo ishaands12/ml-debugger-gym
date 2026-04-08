@@ -3,11 +3,15 @@ from typing import Annotated, Any, Dict, Literal, Optional, Union
 from pydantic import Field
 
 try:
-    from openenv_core import Action as _BaseAction
+    from openenv.core import Action as _BaseAction
     _BASE = _BaseAction
 except ImportError:
-    from pydantic import BaseModel
-    _BASE = BaseModel
+    try:
+        from openenv_core import Action as _BaseAction
+        _BASE = _BaseAction
+    except ImportError:
+        from pydantic import BaseModel
+        _BASE = BaseModel
 
 
 class InspectDataAction(_BASE):

@@ -20,11 +20,11 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
 
     Returns:
         {
-            "dataset": pd.DataFrame,        # full dataset including target column
-            "pipeline": dict,               # {"X": DataFrame, "y": array, "hyperparams": dict}
-            "bug_type": str,                # ground truth bug label
-            "task_description": str,        # natural language description shown to agent
-            "episode_id": str,              # UUID for logging
+            "dataset": pd.DataFrame,
+            "pipeline": dict,
+            "bug_type": str,
+            "task_description": str,
+            "episode_id": str,
         }
     """
     if seed is None:
@@ -33,14 +33,13 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
     episode_id = str(uuid.uuid4())
 
     bug_map = {
-        1: "data_leakage",
-        2: "class_imbalance",
-        3: "wrong_hyperparameter",
-        4: "scaling_error",
+        1: "wrong_hyperparameter",   # Easy: obvious underfitting (clear hints, 10 features)
+        2: "class_imbalance",        # Medium: misleadingly high accuracy, partial hints
+        3: "data_leakage",           # Hard: inflated accuracy, needs correlation analysis
+        4: "wrong_hyperparameter",   # Expert: same bug class but 15 features, obfuscated names, no hints, 2 bugs
     }
 
-    # For difficulty 3+ inject a second bug as well (Hard/Expert)
-    primary_bug = bug_map.get(difficulty, "data_leakage")
+    primary_bug = bug_map.get(difficulty, "wrong_hyperparameter")
 
     # ---- Base dataset ----
     n_samples = 1000 if difficulty < 4 else 800
@@ -77,10 +76,12 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
         "leaky_column": None,
     }
 
+    imbalance_ratio = 0.92
+
     if primary_bug == "data_leakage":
         pipeline = _inject_data_leakage(df, pipeline, rng, difficulty)
     elif primary_bug == "class_imbalance":
-        df, pipeline = _inject_class_imbalance(df, pipeline, rng)
+        df, pipeline = _inject_class_imbalance(df, pipeline, rng, ratio=imbalance_ratio)
     elif primary_bug == "wrong_hyperparameter":
         pipeline = _inject_wrong_hyperparameter(pipeline, rng)
     elif primary_bug == "scaling_error":
@@ -91,7 +92,7 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
         secondary_bugs = [b for b in ["class_imbalance", "wrong_hyperparameter"] if b != primary_bug]
         second = rng.choice(secondary_bugs)
         if second == "class_imbalance":
-            df, pipeline = _inject_class_imbalance(df, pipeline, rng, ratio=0.92)
+            df, pipeline = _inject_class_imbalance(df, pipeline, rng, ratio=0.90)
         elif second == "wrong_hyperparameter":
             pipeline = _inject_wrong_hyperparameter(pipeline, rng)
 
@@ -111,8 +112,15 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _inject_data_leakage(df, pipeline, rng, difficulty):
-    """Add a column perfectly correlated with target (correlation > 0.99)."""
-    noise = rng.normal(0, 0.01, size=len(df))
+    """Add a column correlated with target (correlation ~0.85-0.92, not 1.0).
+
+    High enough to be meaningful leakage, low enough that removing it
+    actually changes the accuracy signal — so the agent must fix it.
+    """
+    # Add moderate noise so correlation is ~0.85-0.90 (not 1.0, which makes
+    # baseline accuracy trivially perfect and the bug ungameable by guessing)
+    noise_scale = 0.6 + rng.uniform(0, 0.3)
+    noise = rng.normal(0, noise_scale, size=len(df))
     leaky_col = "target_encoded" if difficulty < 4 else "enc_y"
     df[leaky_col] = df["target"].astype(float) + noise
     pipeline["X"] = df.drop(columns=["target"]).copy()
@@ -120,7 +128,7 @@ def _inject_data_leakage(df, pipeline, rng, difficulty):
     return pipeline
 
 
-def _inject_class_imbalance(df, pipeline, rng, ratio=0.95):
+def _inject_class_imbalance(df, pipeline, rng, ratio=0.92):
     """Create severe class imbalance (ratio : 1-ratio)."""
     majority = df[df["target"] == 0]
     minority = df[df["target"] == 1]
@@ -128,21 +136,29 @@ def _inject_class_imbalance(df, pipeline, rng, ratio=0.95):
     n_majority = int(len(df) * ratio)
     n_minority = len(df) - n_majority
 
-    majority_sample = majority.sample(n=min(n_majority, len(majority)), random_state=42, replace=len(majority) < n_majority)
-    minority_sample = minority.sample(n=min(n_minority, len(minority)), random_state=42, replace=len(minority) < n_minority)
+    majority_sample = majority.sample(
+        n=min(n_majority, len(majority)), random_state=42,
+        replace=len(majority) < n_majority
+    )
+    minority_sample = minority.sample(
+        n=min(n_minority, len(minority)), random_state=42,
+        replace=len(minority) < n_minority
+    )
 
-    df_imbalanced = pd.concat([majority_sample, minority_sample]).sample(frac=1, random_state=42).reset_index(drop=True)
+    df_imbalanced = pd.concat([majority_sample, minority_sample]).sample(
+        frac=1, random_state=42
+    ).reset_index(drop=True)
     pipeline["X"] = df_imbalanced.drop(columns=["target"]).copy()
     pipeline["y"] = df_imbalanced["target"].values
     return df_imbalanced, pipeline
 
 
 def _inject_wrong_hyperparameter(pipeline, rng):
-    """Set a pathological hyperparameter value."""
+    """Set a pathological hyperparameter value that causes obvious underfitting."""
     bad_params = [
         {"max_depth": 1},
         {"n_estimators": 1},
-        {"min_samples_split": 500},
+        {"min_samples_split": 400},
     ]
     chosen = bad_params[rng.randint(0, len(bad_params))]
     pipeline["hyperparams"].update(chosen)
@@ -150,7 +166,7 @@ def _inject_wrong_hyperparameter(pipeline, rng):
 
 
 def _inject_scaling_error(df, pipeline):
-    """Fit StandardScaler on full dataset before train/test split."""
+    """Fit StandardScaler on full dataset before train/test split (data leakage)."""
     scaler = StandardScaler()
     X = df.drop(columns=["target"])
     X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
@@ -164,9 +180,9 @@ def _inject_scaling_error(df, pipeline):
 # ---------------------------------------------------------------------------
 
 _HINTS = {
-    "data_leakage": {
-        1: "The pipeline is producing suspiciously high validation accuracy. A column in the feature matrix may be directly correlated with the target label. Inspect the features carefully.",
-        2: "Model performance looks too good to be true. Investigate feature correlations — something in the data may be giving away the answer.",
+    "wrong_hyperparameter": {
+        1: "The model is severely underfitting — training accuracy is very low. A hyperparameter may be set to a pathological value that prevents the model from learning. Inspect the pipeline configuration.",
+        2: "Training accuracy is suspiciously low. Investigate the model hyperparameters.",
         3: "Two bugs detected. The pipeline is underperforming. Investigate systematically.",
         4: "Pipeline is underperforming. No additional hints available.",
     },
@@ -176,9 +192,9 @@ _HINTS = {
         3: "Two bugs detected. The pipeline is underperforming. Investigate systematically.",
         4: "Pipeline is underperforming. No additional hints available.",
     },
-    "wrong_hyperparameter": {
-        1: "The model is severely underfitting. A hyperparameter may be set to a pathological value that prevents the model from learning.",
-        2: "Training accuracy is very low. Investigate the model hyperparameters.",
+    "data_leakage": {
+        1: "The pipeline is producing suspiciously high validation accuracy. A column in the feature matrix may be correlated with the target label. Inspect the features carefully.",
+        2: "Model performance looks too good to be true. Investigate feature correlations.",
         3: "Two bugs detected. The pipeline is underperforming. Investigate systematically.",
         4: "Pipeline is underperforming. No additional hints available.",
     },
@@ -190,5 +206,8 @@ _HINTS = {
     },
 }
 
+
 def _build_task_description(bug_type, difficulty, pipeline):
-    return _HINTS.get(bug_type, {}).get(difficulty, "The ML pipeline is underperforming. Diagnose the bug and fix it.")
+    return _HINTS.get(bug_type, {}).get(
+        difficulty, "The ML pipeline is underperforming. Diagnose the bug and fix it."
+    )

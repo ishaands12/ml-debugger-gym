@@ -21,14 +21,15 @@ from grader import MLDebuggerRubric
 from observations import CodeExecutionResult, ModelMetrics, Observation
 
 try:
-    from openenv_core import Environment as BaseEnvironment
-    import warnings
-    warnings.filterwarnings("ignore", category=DeprecationWarning, module="openenv_core")
+    from openenv.core import Environment as BaseEnvironment
 except ImportError:
-    class BaseEnvironment:
-        rubric = None
-        def __init__(self, *args, **kwargs):
-            pass
+    try:
+        from openenv_core import Environment as BaseEnvironment
+    except ImportError:
+        class BaseEnvironment:
+            rubric = None
+            def __init__(self, *args, **kwargs):
+                pass
 
 
 class MLDebuggerEnv(BaseEnvironment):
@@ -86,9 +87,19 @@ class MLDebuggerEnv(BaseEnvironment):
         self._pipeline = pipeline_data["pipeline"]
         self._ground_truth_bug = pipeline_data["bug_type"]
         self._wrong_submissions = 0
+        self._rubric.reset_episode()
 
         baseline = self._run_evaluation()
-        target_accuracy = min(baseline.accuracy + 0.10 + (difficulty * 0.05), 0.95)
+        # For data_leakage: removing the leak DROPS accuracy (that's the point).
+        # Target is set below baseline so the agent can succeed after fixing.
+        # For all other bugs: target is above baseline (agent must improve the pipeline).
+        if self._ground_truth_bug == "data_leakage":
+            # Expect ~10% accuracy drop after removing leaky column; target = honest floor
+            target_accuracy = max(baseline.accuracy - 0.10, 0.75)
+        else:
+            # Target scales with difficulty: D1=+5%, D2=+8%, D3=+12%, D4=+15%
+            increments = {1: 0.05, 2: 0.08, 3: 0.12, 4: 0.10}
+            target_accuracy = min(baseline.accuracy + increments.get(difficulty, 0.10), 0.92)
 
         self._obs = Observation(
             done=False,

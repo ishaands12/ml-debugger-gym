@@ -153,10 +153,19 @@ def test_state_method_returns_observation(env):
     assert isinstance(obs, Observation)
 
 
-def test_reward_is_negative_for_plain_step(env):
+def test_reward_has_exploration_bonus_first_inspect(env):
+    # First inspect of a new target: -0.02 + 0.05 exploration = +0.03
     action = InspectDataAction(action_type="inspect_data", target="shape")
     obs = env.step(action)
-    assert obs.reward < 0  # step penalty
+    assert obs.reward == pytest.approx(0.03, abs=1e-3)
+
+
+def test_reward_is_negative_for_repeated_inspect(env):
+    # Repeated inspect gives only step penalty
+    action = InspectDataAction(action_type="inspect_data", target="shape")
+    env.step(action)  # first call
+    obs = env.step(action)  # second call
+    assert obs.reward == pytest.approx(-0.02, abs=1e-3)
 
 
 def test_obs_done_false_initially(env):
