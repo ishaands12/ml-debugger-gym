@@ -103,7 +103,7 @@ class MLDebuggerEnv(BaseEnvironment):
 
         self._obs = Observation(
             done=False,
-            reward=None,
+            reward=0.5,
             step=0,
             max_steps=self.max_steps,
             task_description=pipeline_data["task_description"],

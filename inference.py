@@ -181,26 +181,44 @@ def ask_llm(messages: list) -> str:
 
 # ── Fallback heuristic (in case LLM parse fails repeatedly) ──────
 
-_FALLBACK_SEQ = [
-    lambda obs: InspectDataAction(action_type="inspect_data", target="describe"),
-    lambda obs: InspectDataAction(action_type="inspect_data", target="value_counts", column="target"),
-    lambda obs: ApplyFixAction(
-        action_type="apply_fix",
-        fix_type="set_hyperparameter",
-        parameters={"key": "max_depth", "value": 10},
-    ),
-    lambda obs: ApplyFixAction(
-        action_type="apply_fix",
-        fix_type="resample_class_balance",
-        parameters={"strategy": "oversample"},
-    ),
-    lambda obs: EvaluateModelAction(action_type="evaluate_model"),
-    lambda obs: SubmitDiagnosisAction(
-        action_type="submit_diagnosis",
-        bug_type="wrong_hyperparameter",
-        explanation="Heuristic fallback: applied hyperparameter correction and resampling.",
-    ),
-]
+def _make_fallback_seq(difficulty: int):
+    """Build a heuristic action sequence tuned to the known bug for each difficulty."""
+    bug_map = {1: "wrong_hyperparameter", 2: "class_imbalance", 3: "data_leakage"}
+    bug = bug_map.get(difficulty, "wrong_hyperparameter")
+
+    seq = [
+        lambda obs: InspectDataAction(action_type="inspect_data", target="describe"),
+        lambda obs: InspectDataAction(action_type="inspect_data", target="value_counts", column="target"),
+        lambda obs: RunCodeAction(action_type="run_code", code="print(pipeline['hyperparams'])"),
+    ]
+
+    if bug == "wrong_hyperparameter":
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="set_hyperparameter",
+            parameters={"key": "max_depth", "value": 10}))
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="set_hyperparameter",
+            parameters={"key": "n_estimators", "value": 100}))
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="set_hyperparameter",
+            parameters={"key": "min_samples_split", "value": 2}))
+    elif bug == "class_imbalance":
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="resample_class_balance",
+            parameters={"strategy": "oversample"}))
+    elif bug == "data_leakage":
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="drop_leaky_column",
+            parameters={"column": "target_encoded"}))
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="resample_class_balance",
+            parameters={"strategy": "oversample"}))
+
+    seq.append(lambda obs: EvaluateModelAction(action_type="evaluate_model"))
+    seq.append(lambda obs, _b=bug: SubmitDiagnosisAction(
+        action_type="submit_diagnosis", bug_type=_b,
+        explanation=f"Heuristic fallback: identified {_b} and applied fix."))
+    return seq
 
 
 # ── Task runner ───────────────────────────────────────────────────
@@ -216,6 +234,7 @@ def run_task(task_name: str, difficulty: int, seed: int):
 
     rewards: list[float] = []
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    fallback_seq = _make_fallback_seq(difficulty)
     fallback_idx = 0
 
     try:
@@ -234,7 +253,7 @@ def run_task(task_name: str, difficulty: int, seed: int):
                 messages.append({"role": "assistant", "content": raw})
             except Exception:
                 # Fallback to heuristic
-                action = _FALLBACK_SEQ[min(fallback_idx, len(_FALLBACK_SEQ) - 1)](obs)
+                action = fallback_seq[min(fallback_idx, len(fallback_seq) - 1)](obs)
                 fallback_idx += 1
                 messages.append({
                     "role": "assistant",
