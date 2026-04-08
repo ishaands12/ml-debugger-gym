@@ -1,3 +1,17 @@
+---
+title: ML Debugger Gym Environment Server
+emoji: 🔬
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+app_port: 8000
+tags:
+  - openenv
+  - reinforcement-learning
+  - machine-learning
+---
+
 # ML Experiment Debugger Gym
 
 An RL environment where an agent acts as a data scientist debugging broken ML pipelines.
