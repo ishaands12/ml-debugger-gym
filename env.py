@@ -284,36 +284,60 @@ class MLDebuggerEnv(BaseEnvironment):
                 y_tr_for_loss = y_tr        # LongTensor for CrossEntropy
                 y_v_for_loss = y_v
 
-            # Mini-batch training — stop early if loss diverges (NaN/Inf)
+            # ── Training loop — track per-epoch loss ──────────────────
             n = len(X_tr)
+            epoch_losses: list[float] = []
+            diverged = False
+
             for _ in range(epochs):
                 model.train()
                 perm = torch.randperm(n)
-                epoch_ok = True
+                epoch_loss_sum, n_batches = 0.0, 0
                 for start in range(0, n, batch_size):
                     idx = perm[start:start + batch_size]
                     optimizer.zero_grad()
                     out = model(X_tr[idx])
-                    # Use the appropriate loss target type
-                    if loss_fn_name == "mse":
-                        loss = criterion(out, y_tr_for_loss[idx])
-                    else:
-                        loss = criterion(out, y_tr[idx])
+                    loss = criterion(out, y_tr_for_loss[idx] if loss_fn_name == "mse" else y_tr[idx])
                     if not torch.isfinite(loss):
-                        epoch_ok = False
+                        diverged = True
                         break
                     loss.backward()
                     optimizer.step()
-                if not epoch_ok:
+                    epoch_loss_sum += loss.item()
+                    n_batches += 1
+                if diverged:
+                    epoch_losses.append(float("nan"))
                     break
+                if n_batches > 0:
+                    epoch_losses.append(round(epoch_loss_sum / n_batches, 5))
 
+            # ── Gradient norm at final training state ─────────────────
+            grad_norm = 0.0
+            try:
+                model.train()
+                optimizer.zero_grad()
+                sample_n = min(batch_size, n)
+                s_out = model(X_tr[:sample_n])
+                s_tgt = y_tr_for_loss[:sample_n] if loss_fn_name == "mse" else y_tr[:sample_n]
+                s_loss = criterion(s_out, s_tgt)
+                if torch.isfinite(s_loss):
+                    s_loss.backward()
+                    sq_sum = sum(
+                        p.grad.data.norm(2).item() ** 2
+                        for p in model.parameters()
+                        if p.grad is not None
+                    )
+                    grad_norm = round(sq_sum ** 0.5, 8)
+            except Exception:
+                grad_norm = 0.0
+
+            # ── Inference ──────────────────────────────────────────────
             model.eval()
             with torch.no_grad():
                 train_out = model(X_tr)
                 val_out = model(X_v)
-                # Guard against NaN outputs from diverged training
                 if not torch.isfinite(train_out).all():
-                    # Diverged — return near-chance accuracy
+                    # Diverged — return near-chance accuracy with the loss curve
                     n_cls_arr = len(np.unique(y_arr))
                     acc_chance = round(1.0 / max(n_cls_arr, 1), 4)
                     classes, counts = np.unique(y_arr, return_counts=True)
@@ -323,6 +347,8 @@ class MLDebuggerEnv(BaseEnvironment):
                         train_accuracy=acc_chance,
                         val_accuracy=acc_chance,
                         class_distribution={str(int(k)): int(v) for k, v in zip(classes, counts)},
+                        loss_curve=epoch_losses,
+                        gradient_norm=grad_norm,
                     )
                 train_pred = train_out.argmax(dim=1).numpy()
                 val_pred = val_out.argmax(dim=1).numpy()
@@ -338,6 +364,8 @@ class MLDebuggerEnv(BaseEnvironment):
                 train_accuracy=round(train_acc, 4),
                 val_accuracy=round(val_acc, 4),
                 class_distribution={str(int(k)): int(v) for k, v in zip(classes, counts)},
+                loss_curve=epoch_losses,
+                gradient_norm=grad_norm,
             )
 
         except ImportError:
@@ -406,6 +434,9 @@ class MLDebuggerEnv(BaseEnvironment):
             "pipeline": self._pipeline,
             "pd": __import__("pandas"),
             "np": __import__("numpy"),
+            # PyTorch diagnostics readable from run_code
+            "loss_curve": self._obs.current_metrics.loss_curve if self._obs else [],
+            "gradient_norm": self._obs.current_metrics.gradient_norm if self._obs else None,
         }
         old_stdout = sys.stdout
         try:

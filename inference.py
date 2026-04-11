@@ -12,6 +12,7 @@ Required env vars:
 """
 
 import json
+import math
 import os
 import re
 import sys
@@ -118,7 +119,19 @@ STEP 2 — Gather evidence based on model type:
     d. If loss_function='mse' → wrong_loss_function → fix_loss_function(crossentropy)
     e. inspect_data(describe) for completeness
 
-STEP 3 — Diagnose and fix:
+STEP 3 — Read the training diagnostics (PyTorch only):
+  The observation includes:
+  - "Training loss curve": tells you if the model is learning at all
+    * DIVERGED (NaN): learning_rate is catastrophically too high → fix_learning_rate(0.001)
+    * Flat / <5% drop: model not learning → vanishing gradients (sigmoid) OR wrong loss function
+    * Modest drop but accuracy still poor: probably wrong_loss_function (MSE converges but weakly)
+    * Normal convergence: loss is fine, bug is elsewhere
+  - "Gradient norm": measures gradient flow through the network
+    * < 0.0001 (very small): vanishing gradients → fix_activation_function(relu)
+    * > 100 (very large): exploding gradients → fix_learning_rate
+    * Normal range (0.01 – 10): gradient flow is fine
+
+STEP 4 — Diagnose and fix:
   - Low train_accuracy (sklearn) → wrong_hyperparameter
     → check pipeline['hyperparams'] for max_depth=1, n_estimators=1, min_samples_split>50
     → fix the bad param: set_hyperparameter(key=<bad_key>, value=<good_value>)
@@ -127,16 +140,16 @@ STEP 3 — Diagnose and fix:
     → resample_class_balance(strategy=oversample)
   - Suspiciously high accuracy + highly correlated column → data_leakage
     → drop_leaky_column(column=<col>)  [skip "target" itself]
-  - PyTorch near-chance accuracy + learning_rate > 1.0 → wrong_learning_rate
+  - Loss DIVERGED (NaN) + learning_rate > 1.0 → wrong_learning_rate
     → fix_learning_rate(learning_rate=0.001)
-  - PyTorch ~50% accuracy + activation='sigmoid' + many layers → wrong_activation (vanishing gradients)
+  - Flat loss + gradient_norm < 0.0001 + deep network → wrong_activation (vanishing)
     → fix_activation_function(activation='relu')
-  - PyTorch ~60-68% accuracy + loss_function='mse' → wrong_loss_function
+  - Loss decreasing but accuracy stuck ~60-68% + loss_function='mse' → wrong_loss_function
     → fix_loss_function(loss_function='crossentropy')
 
-STEP 4 — Always call evaluate_model after fixing to verify improvement.
+STEP 5 — Always call evaluate_model after fixing to verify improvement.
 
-STEP 5 — Submit when current_accuracy >= target_accuracy.
+STEP 6 — Submit when current_accuracy >= target_accuracy.
   DO NOT submit before reaching the target accuracy.
   After submitting, if rejected, re-evaluate your hypothesis and try a different fix.
 
@@ -171,6 +184,56 @@ def obs_to_text(obs, pipeline: dict | None = None) -> str:
         f"F1: {obs.current_metrics.f1_score:.4f}",
         f"Class distribution: {obs.current_metrics.class_distribution}",
     ]
+
+    # ── PyTorch training diagnostics ──────────────────────────────
+    curve = obs.current_metrics.loss_curve
+    if curve:
+        has_nan = any(math.isnan(x) for x in curve)
+        if has_nan:
+            parts.append("Training loss curve: DIVERGED (NaN) — loss exploded during training")
+        else:
+            # Show first-3 and last-3 epochs for a compact view
+            if len(curve) > 6:
+                shown = ([f"{x:.4f}" for x in curve[:3]]
+                         + ["..."]
+                         + [f"{x:.4f}" for x in curve[-3:]])
+            else:
+                shown = [f"{x:.4f}" for x in curve]
+            parts.append(f"Training loss curve ({len(curve)} epochs): [{', '.join(shown)}]")
+
+            # Automatic pattern detection for the LLM
+            if len(curve) >= 5:
+                drop = curve[0] - curve[-1]
+                rel_drop = drop / (abs(curve[0]) + 1e-9)
+                if rel_drop < 0.05:
+                    parts.append(
+                        "DIAGNOSTIC: Loss barely decreased (<5% drop) — model is not learning. "
+                        "Likely cause: vanishing gradients (sigmoid in deep network) or wrong loss function."
+                    )
+                elif rel_drop < 0.20:
+                    parts.append(
+                        "DIAGNOSTIC: Loss improved modestly. Model learns slowly — "
+                        "check activation function or loss objective."
+                    )
+                else:
+                    parts.append("DIAGNOSTIC: Loss converging normally.")
+
+    gn = obs.current_metrics.gradient_norm
+    loss_diverged = any(math.isnan(x) for x in curve) if curve else False
+    if gn is not None and not loss_diverged:
+        if gn < 1e-4:
+            parts.append(
+                f"Gradient norm: {gn:.2e}  ← VERY SMALL — strong evidence of vanishing gradients. "
+                "Fix: change activation from sigmoid → relu."
+            )
+        elif gn > 100:
+            parts.append(
+                f"Gradient norm: {gn:.2e}  ← VERY LARGE — exploding gradients. "
+                "Fix: reduce learning rate."
+            )
+        else:
+            parts.append(f"Gradient norm: {gn:.6f}")
+
     if obs.last_action_result:
         if obs.last_action_result.stdout:
             parts.append(f"Last output:\n{obs.last_action_result.stdout[:600]}")

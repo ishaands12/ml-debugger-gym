@@ -19,6 +19,9 @@ class ModelMetrics(BaseModel):
     train_accuracy: float
     val_accuracy: float
     class_distribution: Dict[str, int]
+    # PyTorch training diagnostics — empty for sklearn models
+    loss_curve: List[float] = []           # train loss per epoch
+    gradient_norm: Optional[float] = None  # L2 norm of gradients at final step
 
 
 class CodeExecutionResult(BaseModel):
