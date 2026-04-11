@@ -47,7 +47,7 @@ from actions import (  # noqa: E402
 TASKS = [
     {"name": "debug-sklearn",          "difficulty": 1, "seed": 42},  # sklearn RF, wrong_hyperparameter
     {"name": "debug-pytorch-vanishing","difficulty": 6, "seed": 42},  # PyTorch, wrong_activation (sigmoid)
-    {"name": "debug-pytorch-loss",     "difficulty": 7, "seed": 42},  # PyTorch, wrong_loss_function (MSE)
+    {"name": "debug-pytorch-overfit",  "difficulty": 7, "seed": 42},  # PyTorch, missing_regularization
     {"name": "debug-pytorch-lr",       "difficulty": 5, "seed": 42},  # PyTorch, wrong_learning_rate
 ]
 
@@ -87,6 +87,7 @@ Respond with a single JSON object — no markdown, no explanation, no extra text
    {"action_type":"apply_fix","fix_type":"fix_learning_rate","parameters":{"learning_rate":0.001}}
    {"action_type":"apply_fix","fix_type":"fix_activation_function","parameters":{"activation":"relu"}}
    {"action_type":"apply_fix","fix_type":"fix_loss_function","parameters":{"loss_function":"crossentropy"}}
+   {"action_type":"apply_fix","fix_type":"fix_regularization","parameters":{"weight_decay":0.01}}
 
 4. Retrain and evaluate:
    {"action_type":"evaluate_model"}
@@ -98,6 +99,7 @@ Respond with a single JSON object — no markdown, no explanation, no extra text
    {"action_type":"submit_diagnosis","bug_type":"wrong_learning_rate","explanation":"..."}
    {"action_type":"submit_diagnosis","bug_type":"wrong_activation","explanation":"..."}
    {"action_type":"submit_diagnosis","bug_type":"wrong_loss_function","explanation":"..."}
+   {"action_type":"submit_diagnosis","bug_type":"missing_regularization","explanation":"..."}
 
 === DEBUGGING STRATEGY ===
 
@@ -115,8 +117,9 @@ STEP 2 — Gather evidence based on model type:
   For PyTorch (model_type='pytorch'):
     a. run_code: print(pipeline['pytorch_hyperparams']) — examine ALL fields
     b. If learning_rate > 1.0 → wrong_learning_rate → fix_learning_rate(0.001)
-    c. If activation='sigmoid' in a deep network (hidden_sizes has 3+ layers) → wrong_activation → fix_activation_function(relu)
+    c. If activation='sigmoid' AND optimizer='sgd' → wrong_activation (vanishing) → fix_activation_function(relu)
     d. If loss_function='mse' → wrong_loss_function → fix_loss_function(crossentropy)
+    e. If weight_decay=0.0 AND n_train_samples is small AND train-val gap > 0.15 → missing_regularization → fix_regularization(weight_decay=0.01)
     e. inspect_data(describe) for completeness
 
 STEP 3 — Read the training diagnostics (PyTorch only):
@@ -146,6 +149,8 @@ STEP 4 — Diagnose and fix:
     → fix_activation_function(activation='relu')
   - Loss decreasing but accuracy stuck ~60-68% + loss_function='mse' → wrong_loss_function
     → fix_loss_function(loss_function='crossentropy')
+  - Train-val gap > 0.15 (train_acc >> val_acc) + weight_decay=0.0 + n_train_samples small → missing_regularization
+    → fix_regularization(weight_decay=0.01)
 
 STEP 5 — Always call evaluate_model after fixing to verify improvement.
 
@@ -176,14 +181,24 @@ def obs_to_text(obs, pipeline: dict | None = None) -> str:
         if model_type == "pytorch":
             hp = pipeline.get("pytorch_hyperparams", {})
             parts.append(f"pytorch_hyperparams: {hp}")
+    train_acc = obs.current_metrics.train_accuracy
+    val_acc = obs.current_metrics.val_accuracy
+    gap = train_acc - val_acc
     parts += [
         f"Baseline accuracy: {obs.baseline_metrics.accuracy:.4f}  |  "
         f"Current accuracy: {obs.current_metrics.accuracy:.4f}  |  "
         f"Target: {obs.target_accuracy:.4f}",
-        f"Train accuracy: {obs.current_metrics.train_accuracy:.4f}  |  "
-        f"F1: {obs.current_metrics.f1_score:.4f}",
+        f"Train accuracy: {train_acc:.4f}  |  Val accuracy: {val_acc:.4f}  |  "
+        f"Gap: {gap:+.4f}  |  F1: {obs.current_metrics.f1_score:.4f}",
         f"Class distribution: {obs.current_metrics.class_distribution}",
     ]
+    if gap > 0.15:
+        parts.append(
+            f"DIAGNOSTIC: Severe overfitting — train_acc={train_acc:.3f} but val_acc={val_acc:.3f} "
+            f"(gap={gap:.3f}). Model has too many parameters relative to training data. "
+            "Fix: add weight_decay regularization (fix_regularization(weight_decay=0.01)) "
+            "and train on full dataset."
+        )
 
     # ── PyTorch training diagnostics ──────────────────────────────
     curve = obs.current_metrics.loss_curve
@@ -203,17 +218,27 @@ def obs_to_text(obs, pipeline: dict | None = None) -> str:
 
             # Automatic pattern detection for the LLM
             if len(curve) >= 5:
-                drop = curve[0] - curve[-1]
-                rel_drop = drop / (abs(curve[0]) + 1e-9)
-                if rel_drop < 0.05:
+                first = curve[0]
+                last = curve[-1]
+                drop = first - last
+                rel_drop = drop / (abs(first) + 1e-9)
+
+                if first > 1000:
                     parts.append(
-                        "DIAGNOSTIC: Loss barely decreased (<5% drop) — model is not learning. "
-                        "Likely cause: vanishing gradients (sigmoid in deep network) or wrong loss function."
+                        f"DIAGNOSTIC: Initial loss spike ({first:.0f}) — learning rate is "
+                        "catastrophically too high, causing gradient explosion at epoch 1. "
+                        "Fix: reduce learning rate to 0.001."
+                    )
+                elif rel_drop < 0.05:
+                    parts.append(
+                        "DIAGNOSTIC: Loss barely decreased (<5% drop over all epochs) — "
+                        "model is not learning. Likely cause: vanishing gradients "
+                        "(sigmoid + SGD in deep network). Fix: change activation to relu."
                     )
                 elif rel_drop < 0.20:
                     parts.append(
-                        "DIAGNOSTIC: Loss improved modestly. Model learns slowly — "
-                        "check activation function or loss objective."
+                        "DIAGNOSTIC: Loss improved modestly but accuracy is poor. "
+                        "Check activation function or loss objective."
                     )
                 else:
                     parts.append("DIAGNOSTIC: Loss converging normally.")
@@ -325,7 +350,7 @@ def _make_fallback_seq(difficulty: int):
         4: "wrong_hyperparameter",
         5: "wrong_learning_rate",
         6: "wrong_activation",
-        7: "wrong_loss_function",
+        7: "missing_regularization",
     }
     bug = bug_map.get(difficulty, "wrong_hyperparameter")
 
@@ -367,6 +392,10 @@ def _make_fallback_seq(difficulty: int):
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="fix_loss_function",
             parameters={"loss_function": "crossentropy"}))
+    elif bug == "missing_regularization":
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="fix_regularization",
+            parameters={"weight_decay": 0.01}))
 
     seq.append(lambda obs: EvaluateModelAction(action_type="evaluate_model"))
     seq.append(lambda obs, _b=bug: SubmitDiagnosisAction(

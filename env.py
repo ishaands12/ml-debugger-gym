@@ -232,6 +232,9 @@ class MLDebuggerEnv(BaseEnvironment):
             hidden_sizes = hp.get("hidden_sizes", [64, 32])
             activation_name = hp.get("activation", "relu")
             loss_fn_name = hp.get("loss_function", "crossentropy")
+            optimizer_name = hp.get("optimizer", "adam")
+            weight_decay = float(hp.get("weight_decay", 0.0))
+            n_train_samples = hp.get("n_train_samples", None)
 
             X_arr = X.values.astype("float32") if hasattr(X, "values") else np.array(X, dtype="float32")
             y_arr = np.array(y, dtype="int64")
@@ -239,6 +242,11 @@ class MLDebuggerEnv(BaseEnvironment):
             X_train, X_val, y_train, y_val = train_test_split(
                 X_arr, y_arr, test_size=0.2, random_state=42
             )
+
+            # Subsample training set if n_train_samples is set (overfitting bug)
+            if n_train_samples is not None and n_train_samples < len(X_train):
+                X_train = X_train[:int(n_train_samples)]
+                y_train = y_train[:int(n_train_samples)]
 
             X_tr = torch.from_numpy(X_train)
             y_tr = torch.from_numpy(y_train)
@@ -269,7 +277,10 @@ class MLDebuggerEnv(BaseEnvironment):
                         nn.init.zeros_(m.bias)
                 model.apply(_bad_init)
 
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            if optimizer_name == "sgd":
+                optimizer = torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay)
+            else:
+                optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
             # Choose loss function
             if loss_fn_name == "mse":
@@ -380,6 +391,8 @@ class MLDebuggerEnv(BaseEnvironment):
     _BUG_ALIASES = {
         "vanishing_gradients": "wrong_activation",
         "exploding_gradients": "wrong_learning_rate",
+        "overfitting": "missing_regularization",
+        "no_regularization": "missing_regularization",
     }
 
     def _check_termination(self, action: Action) -> tuple:
@@ -577,6 +590,18 @@ class MLDebuggerEnv(BaseEnvironment):
                 self._pipeline.setdefault("pytorch_hyperparams", {})["loss_function"] = loss_fn
                 return CodeExecutionResult(
                     stdout=f"Loss function updated to '{loss_fn}'. Run evaluate_model to retrain.",
+                    stderr="", execution_time_ms=5,
+                )
+
+            elif action.fix_type == "fix_regularization":
+                wd = float(params.get("weight_decay", 0.001))
+                hp = self._pipeline.setdefault("pytorch_hyperparams", {})
+                hp["weight_decay"] = wd
+                # Also remove the training-set size restriction so the model trains on full data
+                if "n_train_samples" in hp:
+                    del hp["n_train_samples"]
+                return CodeExecutionResult(
+                    stdout=f"Regularization applied: weight_decay={wd}, training on full dataset. Run evaluate_model to retrain.",
                     stderr="", execution_time_ms=5,
                 )
 

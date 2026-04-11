@@ -70,7 +70,9 @@ class MLDebuggerRubric(Rubric):
         elif action.action_type == "submit_diagnosis":
             # Accept both canonical name and common aliases
             _aliases = {"vanishing_gradients": "wrong_activation",
-                        "exploding_gradients": "wrong_learning_rate"}
+                        "exploding_gradients": "wrong_learning_rate",
+                        "overfitting": "missing_regularization",
+                        "no_regularization": "missing_regularization"}
             submitted = _aliases.get(action.bug_type, action.bug_type)
             if self._ground_truth_bug and submitted == self._ground_truth_bug:
                 score += 0.3

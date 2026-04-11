@@ -39,7 +39,7 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
         4: "wrong_hyperparameter",   # Expert: same bug class but 15 features, obfuscated names, no hints, 2 bugs
         5: "wrong_learning_rate",    # PyTorch: LR=50 → gradient explosion, near-chance accuracy
         6: "wrong_activation",       # PyTorch: 4-layer sigmoid → vanishing gradients, ~50% accuracy
-        7: "wrong_loss_function",    # PyTorch: MSE loss for classification → weak gradient signal
+        7: "missing_regularization", # PyTorch: 120-sample train, large model, no weight_decay → overfit
     }
 
     primary_bug = bug_map.get(difficulty, "wrong_hyperparameter")
@@ -95,6 +95,8 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
         pipeline = _inject_wrong_activation(pipeline, rng)
     elif primary_bug == "wrong_loss_function":
         pipeline = _inject_wrong_loss_function(pipeline, rng)
+    elif primary_bug == "missing_regularization":
+        pipeline = _inject_missing_regularization(pipeline, rng)
 
     # Hard/Expert/PyTorch: add a second bug
     if difficulty == 3 or difficulty == 4:
@@ -207,35 +209,30 @@ def _inject_wrong_learning_rate(pipeline, rng):
 
 
 def _inject_wrong_activation(pipeline, rng):
-    """Use sigmoid activations in a 4-layer network, causing vanishing gradients.
+    """Use sigmoid activations + SGD optimizer in a 5-layer network → vanishing gradients.
 
-    Through 4 sigmoid layers the gradient is multiplied by σ'(x) ≤ 0.25 at each
-    layer → total gradient ≤ (0.25)^4 ≈ 0.004. The network barely learns and
-    accuracy stays near random chance (~50%). Agent must find activation='sigmoid'
-    and fix it to 'relu'.
+    Adam adapts its step size per-parameter, masking small gradients. SGD does not.
+    With SGD (lr=0.01, no momentum) and 5 sigmoid layers:
+      gradient ≤ (0.25)^5 ≈ 0.001 per layer
+    The network barely moves and accuracy stays near random chance (~50-55%).
+    Agent must find activation='sigmoid' and fix it to 'relu'.
     """
     pipeline["model_type"] = "pytorch"
     pipeline["pytorch_hyperparams"] = {
         "learning_rate": 0.01,
-        "hidden_sizes": [64, 64, 64, 64],   # deep network — vanishing is severe here
-        "activation": "sigmoid",             # BUG: should be relu
-        "epochs": 50,
+        "hidden_sizes": [64, 64, 64, 64, 64],   # 5-layer — vanishing is severe
+        "activation": "sigmoid",                  # BUG: should be relu
+        "epochs": 60,
         "batch_size": 64,
-        "optimizer": "adam",
+        "optimizer": "sgd",                       # SGD exposes raw vanishing gradient
         "loss_function": "crossentropy",
+        "weight_decay": 0.0,
     }
     return pipeline
 
 
 def _inject_wrong_loss_function(pipeline, rng):
-    """Use MSELoss with one-hot targets instead of CrossEntropyLoss.
-
-    MSE treats classification as regression — each output neuron is pushed
-    independently toward 0 or 1, ignoring the mutual-exclusivity constraint
-    that CrossEntropy enforces via softmax. Result: accuracy plateaus at ~60-68%
-    instead of ~85%. Agent must find loss_function='mse' and fix it to
-    'crossentropy'.
-    """
+    """Use MSELoss with one-hot targets instead of CrossEntropyLoss (kept for D2 compat)."""
     pipeline["model_type"] = "pytorch"
     pipeline["pytorch_hyperparams"] = {
         "learning_rate": 0.001,
@@ -244,7 +241,31 @@ def _inject_wrong_loss_function(pipeline, rng):
         "epochs": 40,
         "batch_size": 64,
         "optimizer": "adam",
-        "loss_function": "mse",              # BUG: should be crossentropy
+        "loss_function": "mse",
+        "weight_decay": 0.0,
+    }
+    return pipeline
+
+
+def _inject_missing_regularization(pipeline, rng):
+    """Train a large model on a tiny subset (120 samples) with no weight decay.
+
+    ~9,000 parameters trained on 120 samples → severe overfitting guaranteed.
+    train_accuracy → 0.97+, val_accuracy → 0.62-0.70.
+    The train-val gap is immediately visible in the observation.
+    Agent must find weight_decay=0.0 and fix it to fix_regularization(weight_decay=0.01).
+    """
+    pipeline["model_type"] = "pytorch"
+    pipeline["pytorch_hyperparams"] = {
+        "learning_rate": 0.001,
+        "hidden_sizes": [128, 64],              # large model: ~9600 params
+        "activation": "relu",
+        "epochs": 200,
+        "batch_size": 32,
+        "optimizer": "adam",
+        "loss_function": "crossentropy",
+        "n_train_samples": 120,                 # BUG: tiny train set, no reg → overfit
+        "weight_decay": 0.0,                    # BUG: no regularization
     }
     return pipeline
 
@@ -286,12 +307,20 @@ _HINTS = {
         5: "A PyTorch MLP is training but achieving only random-chance accuracy. The optimizer config in `pipeline['pytorch_hyperparams']` contains the problem. Find and fix it.",
     },
     "wrong_activation": {
-        1: "A deep PyTorch neural network (4 hidden layers) achieves near-random accuracy (~50%) despite a correct learning rate and 50 training epochs. The model is barely learning — characteristic of a gradient flow problem in deep networks. Inspect `pipeline['pytorch_hyperparams']['activation']`.",
-        2: "A deep neural network trains for 50 epochs but accuracy barely improves. Check the activation function.",
+        1: "A deep PyTorch MLP (5 hidden layers, SGD optimizer) achieves near-random accuracy (~50-55%) after 60 epochs. Loss barely decreases — the gradient is dying before it reaches the early layers. Inspect `pipeline['pytorch_hyperparams']['activation']`.",
+        2: "A deep neural network trains for 60 epochs but accuracy barely improves. Check the activation function and optimizer.",
         3: "Neural network architecture bug detected. Investigate the layer configuration systematically.",
         4: "Neural network underperforming. No hints available.",
         5: "Deep PyTorch network not learning. Diagnose the architecture.",
-        6: "A 4-layer PyTorch MLP is achieving ~50% accuracy (near random chance) after 50 epochs with a proper learning rate. The gradient is not flowing through the network. Run `print(pipeline['pytorch_hyperparams'])` to inspect the architecture configuration.",
+        6: "A 5-layer PyTorch MLP trained with SGD is achieving ~50-55% accuracy (near random chance) after 60 epochs. The gradient norm at the early layers is effectively zero. Run `print(pipeline['pytorch_hyperparams'])` to inspect the activation function and optimizer.",
+    },
+    "missing_regularization": {
+        1: "A PyTorch MLP is overfitting severely — training accuracy is above 97% but validation accuracy is only ~65%. The model has too many parameters relative to the training set and no regularization. Inspect `pipeline['pytorch_hyperparams']['weight_decay']` and `n_train_samples`.",
+        2: "Neural network training accuracy is very high but validation accuracy is poor. Investigate regularization.",
+        3: "Neural network overfitting detected. Investigate the training configuration.",
+        4: "Neural network pipeline underperforming. No hints available.",
+        5: "PyTorch MLP is overfitting. Diagnose the regularization setup.",
+        7: "A PyTorch MLP shows a severe train-val accuracy gap: training accuracy >97% but validation accuracy ~65%. The model (128-64 hidden units) is trained on only 120 samples with no weight decay — a classic overfitting scenario. Run `print(pipeline['pytorch_hyperparams'])` and check weight_decay and n_train_samples.",
     },
     "wrong_loss_function": {
         1: "A PyTorch MLP trains for 40 epochs and loss converges, but accuracy is stuck at 60-68% — far below the achievable 85%+. The optimization objective may not align with classification. Inspect `pipeline['pytorch_hyperparams']['loss_function']`.",
@@ -299,7 +328,7 @@ _HINTS = {
         3: "Neural network training bug. Investigate the optimization objective.",
         4: "Neural network pipeline underperforming. No hints available.",
         5: "PyTorch MLP accuracy plateaus well below optimal. Diagnose the training setup.",
-        7: "A PyTorch MLP has converging training loss but validation accuracy plateaus at ~60-68% after 40 epochs. CrossEntropyLoss is the correct objective for classification — using a regression loss (MSE) on one-hot targets weakens the gradient signal. Run `print(pipeline['pytorch_hyperparams'])` to check.",
+        7: "A PyTorch MLP has converging training loss but validation accuracy plateaus at ~60-68% after 40 epochs. CrossEntropyLoss is the correct objective for classification. Run `print(pipeline['pytorch_hyperparams'])` to check.",
     },
     "exploding_gradients": {
         1: "The neural network loss is spiking and diverging — gradients may be exploding. Check the model architecture and training configuration.",

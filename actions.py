@@ -39,6 +39,7 @@ class ApplyFixAction(_BASE):
         "fix_batch_normalization",
         "fix_activation_function",
         "fix_loss_function",
+        "fix_regularization",
     ]
     parameters: Dict[str, Any] = {}
 
@@ -62,6 +63,8 @@ class SubmitDiagnosisAction(_BASE):
         "wrong_activation",
         "vanishing_gradients",
         "wrong_loss_function",
+        "missing_regularization",
+        "overfitting",
     ]
     explanation: str
 
