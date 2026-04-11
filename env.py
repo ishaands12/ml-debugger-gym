@@ -222,6 +222,10 @@ class MLDebuggerEnv(BaseEnvironment):
             from sklearn.model_selection import train_test_split
             import numpy as np
 
+            # Fix seed so training is deterministic: same broken hyperparams always
+            # produce the same broken accuracy, same fixed hyperparams always recover.
+            torch.manual_seed(42)
+
             X = self._pipeline["X"]
             y = self._pipeline["y"]
             hp = self._pipeline.get("pytorch_hyperparams", {})
