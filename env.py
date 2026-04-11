@@ -80,7 +80,7 @@ class MLDebuggerEnv(BaseEnvironment):
         Returns:
             Initial Observation.
         """
-        difficulty = max(1, min(5, int(difficulty)))
+        difficulty = max(1, min(7, int(difficulty)))
         pipeline_data = generate_broken_pipeline(difficulty=difficulty, seed=seed)
 
         self._dataset = pipeline_data["dataset"]
@@ -167,7 +167,8 @@ class MLDebuggerEnv(BaseEnvironment):
             self._obs.current_metrics = self._run_evaluation()
             return None
         elif action.action_type == "submit_diagnosis":
-            if action.bug_type != self._ground_truth_bug:
+            canonical = self._BUG_ALIASES.get(action.bug_type, action.bug_type)
+            if canonical != self._ground_truth_bug:
                 self._wrong_submissions += 1
             return None
         return None
@@ -229,6 +230,8 @@ class MLDebuggerEnv(BaseEnvironment):
             epochs = int(hp.get("epochs", 30))
             batch_size = int(hp.get("batch_size", 64))
             hidden_sizes = hp.get("hidden_sizes", [64, 32])
+            activation_name = hp.get("activation", "relu")
+            loss_fn_name = hp.get("loss_function", "crossentropy")
 
             X_arr = X.values.astype("float32") if hasattr(X, "values") else np.array(X, dtype="float32")
             y_arr = np.array(y, dtype="int64")
@@ -245,11 +248,15 @@ class MLDebuggerEnv(BaseEnvironment):
             n_in = X_arr.shape[1]
             n_cls = len(np.unique(y_arr))
 
-            # Build MLP
+            # Choose activation class
+            act_map = {"relu": nn.ReLU, "sigmoid": nn.Sigmoid, "tanh": nn.Tanh}
+            act_cls = act_map.get(activation_name, nn.ReLU)
+
+            # Build MLP with the configured activation
             layers = []
             prev = n_in
             for h in hidden_sizes:
-                layers += [nn.Linear(prev, h), nn.ReLU()]
+                layers += [nn.Linear(prev, h), act_cls()]
                 prev = h
             layers.append(nn.Linear(prev, n_cls))
             model = nn.Sequential(*layers)
@@ -263,7 +270,19 @@ class MLDebuggerEnv(BaseEnvironment):
                 model.apply(_bad_init)
 
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-            criterion = nn.CrossEntropyLoss()
+
+            # Choose loss function
+            if loss_fn_name == "mse":
+                criterion = nn.MSELoss()
+                # MSE needs float targets in one-hot form
+                y_tr_for_loss = torch.zeros(len(y_tr), n_cls).scatter_(
+                    1, y_tr.unsqueeze(1), 1.0)
+                y_v_for_loss = torch.zeros(len(y_v), n_cls).scatter_(
+                    1, y_v.unsqueeze(1), 1.0)
+            else:
+                criterion = nn.CrossEntropyLoss()
+                y_tr_for_loss = y_tr        # LongTensor for CrossEntropy
+                y_v_for_loss = y_v
 
             # Mini-batch training — stop early if loss diverges (NaN/Inf)
             n = len(X_tr)
@@ -275,7 +294,11 @@ class MLDebuggerEnv(BaseEnvironment):
                     idx = perm[start:start + batch_size]
                     optimizer.zero_grad()
                     out = model(X_tr[idx])
-                    loss = criterion(out, y_tr[idx])
+                    # Use the appropriate loss target type
+                    if loss_fn_name == "mse":
+                        loss = criterion(out, y_tr_for_loss[idx])
+                    else:
+                        loss = criterion(out, y_tr[idx])
                     if not torch.isfinite(loss):
                         epoch_ok = False
                         break
@@ -325,13 +348,22 @@ class MLDebuggerEnv(BaseEnvironment):
     # Termination
     # ------------------------------------------------------------------
 
+    # Aliases: different names that mean the same bug
+    _BUG_ALIASES = {
+        "vanishing_gradients": "wrong_activation",
+        "exploding_gradients": "wrong_learning_rate",
+    }
+
     def _check_termination(self, action: Action) -> tuple:
-        if (
-            action.action_type == "submit_diagnosis"
-            and action.bug_type == self._ground_truth_bug
-            and self._obs.current_metrics.accuracy >= self._obs.target_accuracy
-        ):
-            return True, {"reason": "success", "bug_found": True}
+        submitted = action.bug_type if action.action_type == "submit_diagnosis" else None
+        if submitted:
+            # Normalise aliases
+            canonical = self._BUG_ALIASES.get(submitted, submitted)
+            if (
+                canonical == self._ground_truth_bug
+                and self._obs.current_metrics.accuracy >= self._obs.target_accuracy
+            ):
+                return True, {"reason": "success", "bug_found": True}
 
         if self._wrong_submissions >= 3:
             return True, {"reason": "too_many_wrong_submissions"}
@@ -498,6 +530,22 @@ class MLDebuggerEnv(BaseEnvironment):
                 self._pipeline.setdefault("pytorch_hyperparams", {})["use_batch_norm"] = True
                 return CodeExecutionResult(
                     stdout="Batch normalization layers enabled in the network.",
+                    stderr="", execution_time_ms=5,
+                )
+
+            elif action.fix_type == "fix_activation_function":
+                activation = params.get("activation", "relu")
+                self._pipeline.setdefault("pytorch_hyperparams", {})["activation"] = activation
+                return CodeExecutionResult(
+                    stdout=f"Activation function updated to '{activation}'. Run evaluate_model to retrain.",
+                    stderr="", execution_time_ms=5,
+                )
+
+            elif action.fix_type == "fix_loss_function":
+                loss_fn = params.get("loss_function", "crossentropy")
+                self._pipeline.setdefault("pytorch_hyperparams", {})["loss_function"] = loss_fn
+                return CodeExecutionResult(
+                    stdout=f"Loss function updated to '{loss_fn}'. Run evaluate_model to retrain.",
                     stderr="", execution_time_ms=5,
                 )
 

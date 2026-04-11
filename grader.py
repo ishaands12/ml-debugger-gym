@@ -68,7 +68,11 @@ class MLDebuggerRubric(Rubric):
                 score = max(score - 0.1, 0.01)
 
         elif action.action_type == "submit_diagnosis":
-            if self._ground_truth_bug and action.bug_type == self._ground_truth_bug:
+            # Accept both canonical name and common aliases
+            _aliases = {"vanishing_gradients": "wrong_activation",
+                        "exploding_gradients": "wrong_learning_rate"}
+            submitted = _aliases.get(action.bug_type, action.bug_type)
+            if self._ground_truth_bug and submitted == self._ground_truth_bug:
                 score += 0.3
             if observation.current_metrics.accuracy >= observation.target_accuracy:
                 score += 0.5

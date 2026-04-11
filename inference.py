@@ -41,12 +41,13 @@ from actions import (  # noqa: E402
     SubmitDiagnosisAction,
 )
 
-# ── Tasks (easy / medium / hard / pytorch) ────────────────────────
+# ── Tasks ─────────────────────────────────────────────────────────
+# 3 out of 4 tasks use PyTorch — directly relevant to the hackathon theme.
 TASKS = [
-    {"name": "debug-easy", "difficulty": 1, "seed": 42},
-    {"name": "debug-medium", "difficulty": 2, "seed": 42},
-    {"name": "debug-hard", "difficulty": 3, "seed": 42},
-    {"name": "debug-pytorch", "difficulty": 5, "seed": 42},
+    {"name": "debug-sklearn",          "difficulty": 1, "seed": 42},  # sklearn RF, wrong_hyperparameter
+    {"name": "debug-pytorch-vanishing","difficulty": 6, "seed": 42},  # PyTorch, wrong_activation (sigmoid)
+    {"name": "debug-pytorch-loss",     "difficulty": 7, "seed": 42},  # PyTorch, wrong_loss_function (MSE)
+    {"name": "debug-pytorch-lr",       "difficulty": 5, "seed": 42},  # PyTorch, wrong_learning_rate
 ]
 
 ENV_NAME = "ml_debugger_gym"
@@ -83,6 +84,8 @@ Respond with a single JSON object — no markdown, no explanation, no extra text
    {"action_type":"apply_fix","fix_type":"drop_leaky_column","parameters":{"column":"<col_name>"}}
    PyTorch fixes:
    {"action_type":"apply_fix","fix_type":"fix_learning_rate","parameters":{"learning_rate":0.001}}
+   {"action_type":"apply_fix","fix_type":"fix_activation_function","parameters":{"activation":"relu"}}
+   {"action_type":"apply_fix","fix_type":"fix_loss_function","parameters":{"loss_function":"crossentropy"}}
 
 4. Retrain and evaluate:
    {"action_type":"evaluate_model"}
@@ -92,6 +95,8 @@ Respond with a single JSON object — no markdown, no explanation, no extra text
    {"action_type":"submit_diagnosis","bug_type":"class_imbalance","explanation":"..."}
    {"action_type":"submit_diagnosis","bug_type":"data_leakage","explanation":"..."}
    {"action_type":"submit_diagnosis","bug_type":"wrong_learning_rate","explanation":"..."}
+   {"action_type":"submit_diagnosis","bug_type":"wrong_activation","explanation":"..."}
+   {"action_type":"submit_diagnosis","bug_type":"wrong_loss_function","explanation":"..."}
 
 === DEBUGGING STRATEGY ===
 
@@ -107,9 +112,11 @@ STEP 2 — Gather evidence based on model type:
     d. run_code: print(df.corr()['target'].abs().sort_values(ascending=False).head(8))
 
   For PyTorch (model_type='pytorch'):
-    a. run_code: print(pipeline['pytorch_hyperparams']) — look for learning_rate
-    b. If learning_rate > 1.0: it's wrong_learning_rate — fix it to 0.001
-    c. inspect_data(describe) for completeness
+    a. run_code: print(pipeline['pytorch_hyperparams']) — examine ALL fields
+    b. If learning_rate > 1.0 → wrong_learning_rate → fix_learning_rate(0.001)
+    c. If activation='sigmoid' in a deep network (hidden_sizes has 3+ layers) → wrong_activation → fix_activation_function(relu)
+    d. If loss_function='mse' → wrong_loss_function → fix_loss_function(crossentropy)
+    e. inspect_data(describe) for completeness
 
 STEP 3 — Diagnose and fix:
   - Low train_accuracy (sklearn) → wrong_hyperparameter
@@ -122,6 +129,10 @@ STEP 3 — Diagnose and fix:
     → drop_leaky_column(column=<col>)  [skip "target" itself]
   - PyTorch near-chance accuracy + learning_rate > 1.0 → wrong_learning_rate
     → fix_learning_rate(learning_rate=0.001)
+  - PyTorch ~50% accuracy + activation='sigmoid' + many layers → wrong_activation (vanishing gradients)
+    → fix_activation_function(activation='relu')
+  - PyTorch ~60-68% accuracy + loss_function='mse' → wrong_loss_function
+    → fix_loss_function(loss_function='crossentropy')
 
 STEP 4 — Always call evaluate_model after fixing to verify improvement.
 
@@ -250,6 +261,8 @@ def _make_fallback_seq(difficulty: int):
         3: "data_leakage",
         4: "wrong_hyperparameter",
         5: "wrong_learning_rate",
+        6: "wrong_activation",
+        7: "wrong_loss_function",
     }
     bug = bug_map.get(difficulty, "wrong_hyperparameter")
 
@@ -258,12 +271,10 @@ def _make_fallback_seq(difficulty: int):
                                   code="print(pipeline.get('model_type','sklearn')); print(pipeline.get('hyperparams',{})); print(pipeline.get('pytorch_hyperparams',{}))"),
         lambda obs: InspectDataAction(action_type="inspect_data", target="describe"),
         lambda obs: InspectDataAction(action_type="inspect_data", target="value_counts", column="target"),
-        lambda obs: RunCodeAction(action_type="run_code",
-                                  code="print(df.corr()['target'].abs().sort_values(ascending=False).head(8))"),
     ]
 
     if bug == "wrong_hyperparameter":
-        # D1/seed=42: min_samples_split=400 is the injected bug — fix all three to be safe
+        # D1/seed=42: min_samples_split=400 — fix all three to be safe
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="set_hyperparameter",
             parameters={"key": "min_samples_split", "value": 2}))
@@ -285,6 +296,14 @@ def _make_fallback_seq(difficulty: int):
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="fix_learning_rate",
             parameters={"learning_rate": 0.001}))
+    elif bug == "wrong_activation":
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="fix_activation_function",
+            parameters={"activation": "relu"}))
+    elif bug == "wrong_loss_function":
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="fix_loss_function",
+            parameters={"loss_function": "crossentropy"}))
 
     seq.append(lambda obs: EvaluateModelAction(action_type="evaluate_model"))
     seq.append(lambda obs, _b=bug: SubmitDiagnosisAction(

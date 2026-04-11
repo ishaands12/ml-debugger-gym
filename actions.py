@@ -37,6 +37,8 @@ class ApplyFixAction(_BASE):
         "fix_learning_rate",
         "fix_weight_initialization",
         "fix_batch_normalization",
+        "fix_activation_function",
+        "fix_loss_function",
     ]
     parameters: Dict[str, Any] = {}
 
@@ -57,6 +59,9 @@ class SubmitDiagnosisAction(_BASE):
         "wrong_learning_rate",
         "exploding_gradients",
         "missing_batch_normalization",
+        "wrong_activation",
+        "vanishing_gradients",
+        "wrong_loss_function",
     ]
     explanation: str
 
