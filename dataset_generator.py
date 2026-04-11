@@ -37,6 +37,7 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
         2: "class_imbalance",        # Medium: misleadingly high accuracy, partial hints
         3: "data_leakage",           # Hard: inflated accuracy, needs correlation analysis
         4: "wrong_hyperparameter",   # Expert: same bug class but 15 features, obfuscated names, no hints, 2 bugs
+        5: "wrong_learning_rate",    # PyTorch: neural network won't converge, bad optimizer LR
     }
 
     primary_bug = bug_map.get(difficulty, "wrong_hyperparameter")
@@ -86,9 +87,11 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
         pipeline = _inject_wrong_hyperparameter(pipeline, rng)
     elif primary_bug == "scaling_error":
         pipeline = _inject_scaling_error(df, pipeline)
+    elif primary_bug == "wrong_learning_rate":
+        pipeline = _inject_wrong_learning_rate(pipeline, rng)
 
-    # Hard/Expert: add a second bug
-    if difficulty >= 3:
+    # Hard/Expert/PyTorch: add a second bug
+    if difficulty == 3 or difficulty == 4:
         secondary_bugs = [b for b in ["class_imbalance", "wrong_hyperparameter"] if b != primary_bug]
         second = rng.choice(secondary_bugs)
         if second == "class_imbalance":
@@ -175,6 +178,26 @@ def _inject_scaling_error(df, pipeline):
     return pipeline
 
 
+def _inject_wrong_learning_rate(pipeline, rng):
+    """Set a catastrophically high learning rate for the PyTorch MLP (causes divergence).
+
+    The model uses Adam with lr=50.0 — gradients explode immediately and the
+    network never converges. Agent must inspect pytorch_hyperparams, identify
+    the bad LR, and fix it to a sane value (e.g. 0.001).
+    """
+    lr_choices = [50.0, 100.0, 10.0]
+    lr = lr_choices[rng.randint(0, len(lr_choices))]
+    pipeline["model_type"] = "pytorch"
+    pipeline["pytorch_hyperparams"] = {
+        "learning_rate": lr,
+        "hidden_sizes": [64, 32],
+        "epochs": 30,
+        "batch_size": 64,
+        "optimizer": "adam",
+    }
+    return pipeline
+
+
 # ---------------------------------------------------------------------------
 # Task descriptions
 # ---------------------------------------------------------------------------
@@ -203,6 +226,20 @@ _HINTS = {
         2: "Investigate whether the scaler was fitted correctly — fit only on training data.",
         3: "Two bugs detected. The pipeline is underperforming. Investigate systematically.",
         4: "Pipeline is underperforming. No additional hints available.",
+    },
+    "wrong_learning_rate": {
+        1: "A PyTorch neural network is training but not converging — validation accuracy stays near 50% (random chance) despite 30 epochs. The optimizer may be misconfigured. Inspect `pipeline['pytorch_hyperparams']` to find the issue.",
+        2: "The neural network training is unstable. Loss diverges within the first few epochs. Check the optimizer hyperparameters.",
+        3: "Two bugs detected in the neural network pipeline. Diagnose systematically.",
+        4: "Neural network pipeline underperforming. No hints available.",
+        5: "A PyTorch MLP is training but achieving only random-chance accuracy. The optimizer config in `pipeline['pytorch_hyperparams']` contains the problem. Find and fix it.",
+    },
+    "exploding_gradients": {
+        1: "The neural network loss is spiking and diverging — gradients may be exploding. Check the model architecture and training configuration.",
+        2: "Training loss is unstable. Investigate gradient clipping or learning rate settings.",
+        3: "Multiple training instability bugs detected. Investigate systematically.",
+        4: "Neural network training is unstable. No hints available.",
+        5: "Neural network gradient explosion detected. Diagnose the root cause.",
     },
 }
 

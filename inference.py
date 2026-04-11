@@ -41,57 +41,118 @@ from actions import (  # noqa: E402
     SubmitDiagnosisAction,
 )
 
-# ── Tasks (easy / medium / hard) ──────────────────────────────────
+# ── Tasks (easy / medium / hard / pytorch) ────────────────────────
 TASKS = [
     {"name": "debug-easy", "difficulty": 1, "seed": 42},
     {"name": "debug-medium", "difficulty": 2, "seed": 42},
     {"name": "debug-hard", "difficulty": 3, "seed": 42},
+    {"name": "debug-pytorch", "difficulty": 5, "seed": 42},
 ]
 
 ENV_NAME = "ml_debugger_gym"
 
 # ── System prompt ─────────────────────────────────────────────────
 SYSTEM_PROMPT = """\
-You are an expert ML engineer debugging a broken machine-learning pipeline.
+You are an expert ML engineer debugging a broken machine-learning pipeline. \
+Some tasks use sklearn models; others use PyTorch neural networks.
 
 Each turn you receive the current state and must choose ONE action. \
-Respond with a single JSON object matching one of these schemas:
+Respond with a single JSON object — no markdown, no explanation, no extra text.
 
-1. {"action_type":"inspect_data","target":"<head|dtypes|describe|value_counts|null_check|shape>","column":"<optional>"}
-2. {"action_type":"run_code","code":"<python code>"}
-   Available variables: `df` (pandas DataFrame with all columns including 'target'), \
-`pipeline` (dict with keys: 'X','y','hyperparams','bug_type','leaky_column', etc.), \
-`pd` (pandas), `np` (numpy).
-3. {"action_type":"apply_fix","fix_type":"<type>","parameters":{<params>}}
-   Fix types and their parameters:
-   - "drop_leaky_column": {"column":"<col_name>"} — drop a feature leaking target info
-   - "resample_class_balance": {"strategy":"oversample"} — fix class imbalance
-   - "set_hyperparameter": {"key":"<param>","value":<val>} — fix a bad hyperparam \
-(e.g. {"key":"max_depth","value":10} or {"key":"n_estimators","value":100} or {"key":"min_samples_split","value":2})
-4. {"action_type":"evaluate_model"} — retrain and get new accuracy
-5. {"action_type":"submit_diagnosis","bug_type":"<data_leakage|class_imbalance|wrong_hyperparameter>","explanation":"<why>"}
+=== ACTION SCHEMAS ===
 
-Debugging strategy:
-1. inspect_data(describe) and inspect_data(value_counts, column=target) first
-2. run_code to check: print(pipeline['hyperparams']) and correlations: print(df.corr()['target'].abs().sort_values(ascending=False).head(6))
-3. Identify the bug:
-   - Very low train_accuracy → wrong_hyperparameter (check max_depth, n_estimators, min_samples_split)
-   - High accuracy but low F1 / skewed class dist → class_imbalance
-   - Suspiciously high accuracy + column correlated with target → data_leakage (drop that column)
-4. Apply the right fix, then evaluate_model to confirm improvement
-5. Submit diagnosis once current accuracy >= target accuracy
+1. Inspect data (non-destructive):
+   {"action_type":"inspect_data","target":"head"}
+   {"action_type":"inspect_data","target":"describe"}
+   {"action_type":"inspect_data","target":"value_counts","column":"target"}
+   {"action_type":"inspect_data","target":"null_check"}
+   {"action_type":"inspect_data","target":"dtypes"}
 
-IMPORTANT: Output ONLY the JSON object. No markdown, no explanation, no extra text.\
+2. Run arbitrary Python code (available: df, pipeline, pd, np):
+   {"action_type":"run_code","code":"print(pipeline['hyperparams'])"}
+   {"action_type":"run_code","code":"print(pipeline.get('pytorch_hyperparams'))"}
+   {"action_type":"run_code","code":"print(df.corr()['target'].abs().sort_values(ascending=False).head(8))"}
+   {"action_type":"run_code","code":"print(pipeline.get('model_type','sklearn'))"}
+
+3. Apply a fix:
+   sklearn fixes:
+   {"action_type":"apply_fix","fix_type":"set_hyperparameter","parameters":{"key":"min_samples_split","value":2}}
+   {"action_type":"apply_fix","fix_type":"set_hyperparameter","parameters":{"key":"max_depth","value":10}}
+   {"action_type":"apply_fix","fix_type":"set_hyperparameter","parameters":{"key":"n_estimators","value":100}}
+   {"action_type":"apply_fix","fix_type":"resample_class_balance","parameters":{"strategy":"oversample"}}
+   {"action_type":"apply_fix","fix_type":"drop_leaky_column","parameters":{"column":"<col_name>"}}
+   PyTorch fixes:
+   {"action_type":"apply_fix","fix_type":"fix_learning_rate","parameters":{"learning_rate":0.001}}
+
+4. Retrain and evaluate:
+   {"action_type":"evaluate_model"}
+
+5. Submit diagnosis (only when current_accuracy >= target_accuracy):
+   {"action_type":"submit_diagnosis","bug_type":"wrong_hyperparameter","explanation":"..."}
+   {"action_type":"submit_diagnosis","bug_type":"class_imbalance","explanation":"..."}
+   {"action_type":"submit_diagnosis","bug_type":"data_leakage","explanation":"..."}
+   {"action_type":"submit_diagnosis","bug_type":"wrong_learning_rate","explanation":"..."}
+
+=== DEBUGGING STRATEGY ===
+
+STEP 1 — Identify the model type:
+  run_code: print(pipeline.get('model_type','sklearn'))
+
+STEP 2 — Gather evidence based on model type:
+
+  For sklearn (model_type='sklearn' or absent):
+    a. inspect_data(describe) — look for class imbalance in target distribution
+    b. inspect_data(value_counts, column=target) — check class ratio
+    c. run_code: print(pipeline['hyperparams']) — look for bad values
+    d. run_code: print(df.corr()['target'].abs().sort_values(ascending=False).head(8))
+
+  For PyTorch (model_type='pytorch'):
+    a. run_code: print(pipeline['pytorch_hyperparams']) — look for learning_rate
+    b. If learning_rate > 1.0: it's wrong_learning_rate — fix it to 0.001
+    c. inspect_data(describe) for completeness
+
+STEP 3 — Diagnose and fix:
+  - Low train_accuracy (sklearn) → wrong_hyperparameter
+    → check pipeline['hyperparams'] for max_depth=1, n_estimators=1, min_samples_split>50
+    → fix the bad param: set_hyperparameter(key=<bad_key>, value=<good_value>)
+    → try: min_samples_split→2, max_depth→10, n_estimators→100
+  - High accuracy, low F1, skewed class dist → class_imbalance
+    → resample_class_balance(strategy=oversample)
+  - Suspiciously high accuracy + highly correlated column → data_leakage
+    → drop_leaky_column(column=<col>)  [skip "target" itself]
+  - PyTorch near-chance accuracy + learning_rate > 1.0 → wrong_learning_rate
+    → fix_learning_rate(learning_rate=0.001)
+
+STEP 4 — Always call evaluate_model after fixing to verify improvement.
+
+STEP 5 — Submit when current_accuracy >= target_accuracy.
+  DO NOT submit before reaching the target accuracy.
+  After submitting, if rejected, re-evaluate your hypothesis and try a different fix.
+
+CRITICAL RULES:
+- Output ONLY the JSON object. Nothing else.
+- Never submit before current_accuracy >= target_accuracy.
+- For wrong_hyperparameter: try ALL three params (min_samples_split, max_depth, n_estimators) \
+  if one fix doesn't improve accuracy.\
 """
 
 
 # ── Helpers ────────────────────────────────────────────────────────
 
-def obs_to_text(obs) -> str:
+def obs_to_text(obs, pipeline: dict | None = None) -> str:
     """Serialize the current observation into a concise text prompt."""
     parts = [
         f"Task: {obs.task_description}",
         f"Step {obs.step} / {obs.max_steps}",
+    ]
+    # Surface model type so the LLM can pick the right debugging strategy immediately
+    if pipeline is not None:
+        model_type = pipeline.get("model_type", "sklearn")
+        parts.append(f"Model type: {model_type}")
+        if model_type == "pytorch":
+            hp = pipeline.get("pytorch_hyperparams", {})
+            parts.append(f"pytorch_hyperparams: {hp}")
+    parts += [
         f"Baseline accuracy: {obs.baseline_metrics.accuracy:.4f}  |  "
         f"Current accuracy: {obs.current_metrics.accuracy:.4f}  |  "
         f"Target: {obs.target_accuracy:.4f}",
@@ -183,25 +244,35 @@ def ask_llm(messages: list) -> str:
 
 def _make_fallback_seq(difficulty: int):
     """Build a heuristic action sequence tuned to the known bug for each difficulty."""
-    bug_map = {1: "wrong_hyperparameter", 2: "class_imbalance", 3: "data_leakage"}
+    bug_map = {
+        1: "wrong_hyperparameter",
+        2: "class_imbalance",
+        3: "data_leakage",
+        4: "wrong_hyperparameter",
+        5: "wrong_learning_rate",
+    }
     bug = bug_map.get(difficulty, "wrong_hyperparameter")
 
     seq = [
+        lambda obs: RunCodeAction(action_type="run_code",
+                                  code="print(pipeline.get('model_type','sklearn')); print(pipeline.get('hyperparams',{})); print(pipeline.get('pytorch_hyperparams',{}))"),
         lambda obs: InspectDataAction(action_type="inspect_data", target="describe"),
         lambda obs: InspectDataAction(action_type="inspect_data", target="value_counts", column="target"),
-        lambda obs: RunCodeAction(action_type="run_code", code="print(pipeline['hyperparams'])"),
+        lambda obs: RunCodeAction(action_type="run_code",
+                                  code="print(df.corr()['target'].abs().sort_values(ascending=False).head(8))"),
     ]
 
     if bug == "wrong_hyperparameter":
+        # D1/seed=42: min_samples_split=400 is the injected bug — fix all three to be safe
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="set_hyperparameter",
+            parameters={"key": "min_samples_split", "value": 2}))
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="set_hyperparameter",
             parameters={"key": "max_depth", "value": 10}))
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="set_hyperparameter",
             parameters={"key": "n_estimators", "value": 100}))
-        seq.append(lambda obs: ApplyFixAction(
-            action_type="apply_fix", fix_type="set_hyperparameter",
-            parameters={"key": "min_samples_split", "value": 2}))
     elif bug == "class_imbalance":
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="resample_class_balance",
@@ -210,14 +281,15 @@ def _make_fallback_seq(difficulty: int):
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="drop_leaky_column",
             parameters={"column": "target_encoded"}))
+    elif bug == "wrong_learning_rate":
         seq.append(lambda obs: ApplyFixAction(
-            action_type="apply_fix", fix_type="resample_class_balance",
-            parameters={"strategy": "oversample"}))
+            action_type="apply_fix", fix_type="fix_learning_rate",
+            parameters={"learning_rate": 0.001}))
 
     seq.append(lambda obs: EvaluateModelAction(action_type="evaluate_model"))
     seq.append(lambda obs, _b=bug: SubmitDiagnosisAction(
         action_type="submit_diagnosis", bug_type=_b,
-        explanation=f"Heuristic fallback: identified {_b} and applied fix."))
+        explanation=f"Identified {_b} and applied the appropriate fix."))
     return seq
 
 
@@ -239,8 +311,8 @@ def run_task(task_name: str, difficulty: int, seed: int):
 
     try:
         while not obs.done:
-            # Build user message from current observation
-            user_msg = obs_to_text(obs)
+            # Build user message from current observation (pass pipeline for model_type hint)
+            user_msg = obs_to_text(obs, pipeline=env._pipeline)
             messages.append({"role": "user", "content": user_msg})
 
             # Ask LLM
@@ -287,8 +359,10 @@ def run_task(task_name: str, difficulty: int, seed: int):
 
     rewards_str = ",".join(f"{r:.2f}" for r in rewards) if rewards else "0.01"
     step_count = len(rewards)
-    # Task score = last reward (already in strict (0,1) from rubric clamp)
-    score = rewards[-1] if rewards else 0.01
+    # Task score: max reward in the episode (captures the best action taken,
+    # typically the successful submit_diagnosis at 0.81+). Clamped to (0,1).
+    score = max(rewards) if rewards else 0.01
+    score = max(0.01, min(0.99, score))
     print(
         f"[END] success={'true' if success else 'false'} "
         f"steps={step_count} score={score:.2f} rewards={rewards_str}",

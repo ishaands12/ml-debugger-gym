@@ -34,6 +34,9 @@ class ApplyFixAction(_BASE):
         "fix_scaler_placement",
         "fix_train_test_split",
         "fix_missing_value_handling",
+        "fix_learning_rate",
+        "fix_weight_initialization",
+        "fix_batch_normalization",
     ]
     parameters: Dict[str, Any] = {}
 
@@ -51,6 +54,9 @@ class SubmitDiagnosisAction(_BASE):
         "scaling_error",
         "train_test_contamination",
         "missing_value_handling",
+        "wrong_learning_rate",
+        "exploding_gradients",
+        "missing_batch_normalization",
     ]
     explanation: str
 

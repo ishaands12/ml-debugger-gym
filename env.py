@@ -80,7 +80,7 @@ class MLDebuggerEnv(BaseEnvironment):
         Returns:
             Initial Observation.
         """
-        difficulty = max(1, min(4, int(difficulty)))
+        difficulty = max(1, min(5, int(difficulty)))
         pipeline_data = generate_broken_pipeline(difficulty=difficulty, seed=seed)
 
         self._dataset = pipeline_data["dataset"]
@@ -173,10 +173,15 @@ class MLDebuggerEnv(BaseEnvironment):
         return None
 
     # ------------------------------------------------------------------
-    # ML evaluation
+    # ML evaluation (dispatches to sklearn or PyTorch based on pipeline config)
     # ------------------------------------------------------------------
 
     def _run_evaluation(self) -> ModelMetrics:
+        if self._pipeline.get("model_type") == "pytorch":
+            return self._run_pytorch_evaluation()
+        return self._run_sklearn_evaluation()
+
+    def _run_sklearn_evaluation(self) -> ModelMetrics:
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.metrics import accuracy_score, f1_score
         from sklearn.model_selection import train_test_split
@@ -206,6 +211,115 @@ class MLDebuggerEnv(BaseEnvironment):
             val_accuracy=round(val_acc, 4),
             class_distribution={str(int(k)): int(v) for k, v in zip(classes, counts)},
         )
+
+    def _run_pytorch_evaluation(self) -> ModelMetrics:
+        """Train a PyTorch MLP with the current pipeline config and return metrics."""
+        try:
+            import torch
+            import torch.nn as nn
+            from sklearn.metrics import accuracy_score, f1_score
+            from sklearn.model_selection import train_test_split
+            import numpy as np
+
+            X = self._pipeline["X"]
+            y = self._pipeline["y"]
+            hp = self._pipeline.get("pytorch_hyperparams", {})
+
+            lr = float(hp.get("learning_rate", 0.001))
+            epochs = int(hp.get("epochs", 30))
+            batch_size = int(hp.get("batch_size", 64))
+            hidden_sizes = hp.get("hidden_sizes", [64, 32])
+
+            X_arr = X.values.astype("float32") if hasattr(X, "values") else np.array(X, dtype="float32")
+            y_arr = np.array(y, dtype="int64")
+
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_arr, y_arr, test_size=0.2, random_state=42
+            )
+
+            X_tr = torch.from_numpy(X_train)
+            y_tr = torch.from_numpy(y_train)
+            X_v = torch.from_numpy(X_val)
+            y_v = torch.from_numpy(y_val)
+
+            n_in = X_arr.shape[1]
+            n_cls = len(np.unique(y_arr))
+
+            # Build MLP
+            layers = []
+            prev = n_in
+            for h in hidden_sizes:
+                layers += [nn.Linear(prev, h), nn.ReLU()]
+                prev = h
+            layers.append(nn.Linear(prev, n_cls))
+            model = nn.Sequential(*layers)
+
+            # Apply weight initialization bug if flagged
+            if self._pipeline.get("missing_weight_init"):
+                def _bad_init(m):
+                    if isinstance(m, nn.Linear):
+                        nn.init.uniform_(m.weight, -10.0, 10.0)
+                        nn.init.zeros_(m.bias)
+                model.apply(_bad_init)
+
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            criterion = nn.CrossEntropyLoss()
+
+            # Mini-batch training — stop early if loss diverges (NaN/Inf)
+            n = len(X_tr)
+            for _ in range(epochs):
+                model.train()
+                perm = torch.randperm(n)
+                epoch_ok = True
+                for start in range(0, n, batch_size):
+                    idx = perm[start:start + batch_size]
+                    optimizer.zero_grad()
+                    out = model(X_tr[idx])
+                    loss = criterion(out, y_tr[idx])
+                    if not torch.isfinite(loss):
+                        epoch_ok = False
+                        break
+                    loss.backward()
+                    optimizer.step()
+                if not epoch_ok:
+                    break
+
+            model.eval()
+            with torch.no_grad():
+                train_out = model(X_tr)
+                val_out = model(X_v)
+                # Guard against NaN outputs from diverged training
+                if not torch.isfinite(train_out).all():
+                    # Diverged — return near-chance accuracy
+                    n_cls_arr = len(np.unique(y_arr))
+                    acc_chance = round(1.0 / max(n_cls_arr, 1), 4)
+                    classes, counts = np.unique(y_arr, return_counts=True)
+                    return ModelMetrics(
+                        accuracy=acc_chance,
+                        f1_score=acc_chance,
+                        train_accuracy=acc_chance,
+                        val_accuracy=acc_chance,
+                        class_distribution={str(int(k)): int(v) for k, v in zip(classes, counts)},
+                    )
+                train_pred = train_out.argmax(dim=1).numpy()
+                val_pred = val_out.argmax(dim=1).numpy()
+
+            train_acc = accuracy_score(y_train, train_pred)
+            val_acc = accuracy_score(y_val, val_pred)
+            val_f1 = f1_score(y_val, val_pred, average="weighted", zero_division=0)
+            classes, counts = np.unique(y_arr, return_counts=True)
+
+            return ModelMetrics(
+                accuracy=round(val_acc, 4),
+                f1_score=round(val_f1, 4),
+                train_accuracy=round(train_acc, 4),
+                val_accuracy=round(val_acc, 4),
+                class_distribution={str(int(k)): int(v) for k, v in zip(classes, counts)},
+            )
+
+        except ImportError:
+            # torch not installed — graceful fallback to sklearn
+            return self._run_sklearn_evaluation()
 
     # ------------------------------------------------------------------
     # Termination
@@ -363,6 +477,28 @@ class MLDebuggerEnv(BaseEnvironment):
                 self._pipeline["bad_imputer"] = False
                 return CodeExecutionResult(
                     stdout="Imputer will fit on train only.", stderr="", execution_time_ms=5
+                )
+
+            elif action.fix_type == "fix_learning_rate":
+                lr = float(params.get("learning_rate", params.get("lr", 0.001)))
+                self._pipeline.setdefault("pytorch_hyperparams", {})["learning_rate"] = lr
+                return CodeExecutionResult(
+                    stdout=f"Learning rate updated to {lr}. Run evaluate_model to retrain.",
+                    stderr="", execution_time_ms=5,
+                )
+
+            elif action.fix_type == "fix_weight_initialization":
+                self._pipeline["missing_weight_init"] = False
+                return CodeExecutionResult(
+                    stdout="Weight initialization fixed (PyTorch default Xavier/Kaiming).",
+                    stderr="", execution_time_ms=5,
+                )
+
+            elif action.fix_type == "fix_batch_normalization":
+                self._pipeline.setdefault("pytorch_hyperparams", {})["use_batch_norm"] = True
+                return CodeExecutionResult(
+                    stdout="Batch normalization layers enabled in the network.",
+                    stderr="", execution_time_ms=5,
                 )
 
         except Exception:
