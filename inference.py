@@ -47,7 +47,7 @@ from actions import (  # noqa: E402
 TASKS = [
     {"name": "debug-sklearn",          "difficulty": 1, "seed": 42},  # sklearn RF, wrong_hyperparameter
     {"name": "debug-pytorch-vanishing","difficulty": 6, "seed": 42},  # PyTorch, wrong_activation (sigmoid)
-    {"name": "debug-pytorch-overfit",  "difficulty": 7, "seed": 42},  # PyTorch, missing_regularization
+    {"name": "debug-pytorch-dropout",  "difficulty": 7, "seed": 42},  # PyTorch, excessive_dropout
     {"name": "debug-pytorch-lr",       "difficulty": 5, "seed": 42},  # PyTorch, wrong_learning_rate
 ]
 
@@ -88,6 +88,7 @@ Respond with a single JSON object — no markdown, no explanation, no extra text
    {"action_type":"apply_fix","fix_type":"fix_activation_function","parameters":{"activation":"relu"}}
    {"action_type":"apply_fix","fix_type":"fix_loss_function","parameters":{"loss_function":"crossentropy"}}
    {"action_type":"apply_fix","fix_type":"fix_regularization","parameters":{"weight_decay":0.01}}
+   {"action_type":"apply_fix","fix_type":"fix_dropout","parameters":{"dropout_rate":0.0}}
 
 4. Retrain and evaluate:
    {"action_type":"evaluate_model"}
@@ -350,7 +351,7 @@ def _make_fallback_seq(difficulty: int):
         4: "wrong_hyperparameter",
         5: "wrong_learning_rate",
         6: "wrong_activation",
-        7: "missing_regularization",
+        7: "excessive_dropout",
     }
     bug = bug_map.get(difficulty, "wrong_hyperparameter")
 
@@ -396,6 +397,10 @@ def _make_fallback_seq(difficulty: int):
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="fix_regularization",
             parameters={"weight_decay": 0.01}))
+    elif bug == "excessive_dropout":
+        seq.append(lambda obs: ApplyFixAction(
+            action_type="apply_fix", fix_type="fix_dropout",
+            parameters={"dropout_rate": 0.0}))
 
     seq.append(lambda obs: EvaluateModelAction(action_type="evaluate_model"))
     seq.append(lambda obs, _b=bug: SubmitDiagnosisAction(

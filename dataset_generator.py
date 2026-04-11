@@ -39,7 +39,7 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
         4: "wrong_hyperparameter",   # Expert: same bug class but 15 features, obfuscated names, no hints, 2 bugs
         5: "wrong_learning_rate",    # PyTorch: LR=50 → gradient explosion, near-chance accuracy
         6: "wrong_activation",       # PyTorch: 4-layer sigmoid → vanishing gradients, ~50% accuracy
-        7: "missing_regularization", # PyTorch: 120-sample train, large model, no weight_decay → overfit
+        7: "excessive_dropout",      # PyTorch: dropout_rate=0.9 → drops 90% neurons → can't learn
     }
 
     primary_bug = bug_map.get(difficulty, "wrong_hyperparameter")
@@ -97,6 +97,8 @@ def generate_broken_pipeline(difficulty: int = 1, seed: int = None) -> dict:
         pipeline = _inject_wrong_loss_function(pipeline, rng)
     elif primary_bug == "missing_regularization":
         pipeline = _inject_missing_regularization(pipeline, rng)
+    elif primary_bug == "excessive_dropout":
+        pipeline = _inject_excessive_dropout(pipeline, rng)
 
     # Hard/Expert/PyTorch: add a second bug
     if difficulty == 3 or difficulty == 4:
@@ -247,6 +249,29 @@ def _inject_wrong_loss_function(pipeline, rng):
     return pipeline
 
 
+def _inject_excessive_dropout(pipeline, rng):
+    """Set dropout_rate=0.9 — 90% of neurons are zeroed every forward pass.
+
+    With 90% dropout, only 10% of neurons fire on average. The effective
+    network capacity drops to ~10% of normal. Loss barely decreases and
+    accuracy stays at ~55-65% regardless of training length. Agent must
+    inspect pytorch_hyperparams['dropout_rate'] and fix it to 0.0 or 0.1.
+    """
+    pipeline["model_type"] = "pytorch"
+    pipeline["pytorch_hyperparams"] = {
+        "learning_rate": 0.001,
+        "hidden_sizes": [64, 32],
+        "activation": "relu",
+        "epochs": 60,
+        "batch_size": 64,
+        "optimizer": "adam",
+        "loss_function": "crossentropy",
+        "dropout_rate": 0.9,             # BUG: 90% dropout → model can't learn
+        "weight_decay": 0.0,
+    }
+    return pipeline
+
+
 def _inject_missing_regularization(pipeline, rng):
     """Train a large model on a tiny subset (120 samples) with no weight decay.
 
@@ -313,6 +338,13 @@ _HINTS = {
         4: "Neural network underperforming. No hints available.",
         5: "Deep PyTorch network not learning. Diagnose the architecture.",
         6: "A 5-layer PyTorch MLP trained with SGD is achieving ~50-55% accuracy (near random chance) after 60 epochs. The gradient norm at the early layers is effectively zero. Run `print(pipeline['pytorch_hyperparams'])` to inspect the activation function and optimizer.",
+    },
+    "excessive_dropout": {
+        1: "A PyTorch MLP trains for 60 epochs but accuracy stays at ~55-65% — barely above random chance. Loss is decreasing but slowly. The model architecture is correct but something in the training configuration is preventing neurons from contributing effectively. Inspect `pipeline['pytorch_hyperparams']['dropout_rate']`.",
+        2: "Neural network trains but accuracy is very poor. Investigate the dropout configuration.",
+        3: "Neural network not learning effectively. Investigate dropout.",
+        4: "Neural network pipeline underperforming. No hints available.",
+        7: "A PyTorch MLP has been training for 60 epochs but validation accuracy is stuck at 55-65%. The loss is decreasing but slowly — the model has severely limited effective capacity. Run `print(pipeline['pytorch_hyperparams'])` and inspect the dropout_rate. A value of 0.9 means 90% of neurons are dropped every forward pass.",
     },
     "missing_regularization": {
         1: "A PyTorch MLP is overfitting severely — training accuracy is above 97% but validation accuracy is only ~65%. The model has too many parameters relative to the training set and no regularization. Inspect `pipeline['pytorch_hyperparams']['weight_decay']` and `n_train_samples`.",

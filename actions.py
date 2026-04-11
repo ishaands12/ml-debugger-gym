@@ -40,6 +40,7 @@ class ApplyFixAction(_BASE):
         "fix_activation_function",
         "fix_loss_function",
         "fix_regularization",
+        "fix_dropout",
     ]
     parameters: Dict[str, Any] = {}
 
@@ -65,6 +66,8 @@ class SubmitDiagnosisAction(_BASE):
         "wrong_loss_function",
         "missing_regularization",
         "overfitting",
+        "excessive_dropout",
+        "wrong_dropout",
     ]
     explanation: str
 

@@ -260,11 +260,15 @@ class MLDebuggerEnv(BaseEnvironment):
             act_map = {"relu": nn.ReLU, "sigmoid": nn.Sigmoid, "tanh": nn.Tanh}
             act_cls = act_map.get(activation_name, nn.ReLU)
 
-            # Build MLP with the configured activation
+            dropout_rate = float(hp.get("dropout_rate", 0.0))
+
+            # Build MLP with the configured activation and optional dropout
             layers = []
             prev = n_in
             for h in hidden_sizes:
                 layers += [nn.Linear(prev, h), act_cls()]
+                if dropout_rate > 0:
+                    layers.append(nn.Dropout(dropout_rate))
                 prev = h
             layers.append(nn.Linear(prev, n_cls))
             model = nn.Sequential(*layers)
@@ -393,6 +397,8 @@ class MLDebuggerEnv(BaseEnvironment):
         "exploding_gradients": "wrong_learning_rate",
         "overfitting": "missing_regularization",
         "no_regularization": "missing_regularization",
+        "wrong_dropout": "excessive_dropout",
+        "too_much_dropout": "excessive_dropout",
     }
 
     def _check_termination(self, action: Action) -> tuple:
@@ -590,6 +596,14 @@ class MLDebuggerEnv(BaseEnvironment):
                 self._pipeline.setdefault("pytorch_hyperparams", {})["loss_function"] = loss_fn
                 return CodeExecutionResult(
                     stdout=f"Loss function updated to '{loss_fn}'. Run evaluate_model to retrain.",
+                    stderr="", execution_time_ms=5,
+                )
+
+            elif action.fix_type == "fix_dropout":
+                rate = float(params.get("dropout_rate", 0.0))
+                self._pipeline.setdefault("pytorch_hyperparams", {})["dropout_rate"] = rate
+                return CodeExecutionResult(
+                    stdout=f"Dropout rate updated to {rate}. Run evaluate_model to retrain.",
                     stderr="", execution_time_ms=5,
                 )
 
