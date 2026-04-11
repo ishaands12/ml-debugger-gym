@@ -344,7 +344,7 @@ _HINTS = {
         2: "Neural network trains but accuracy is very poor. Investigate the dropout configuration.",
         3: "Neural network not learning effectively. Investigate dropout.",
         4: "Neural network pipeline underperforming. No hints available.",
-        7: "A PyTorch MLP has been training for 60 epochs but validation accuracy is stuck at 55-65%. The loss is decreasing but slowly — the model has severely limited effective capacity. Run `print(pipeline['pytorch_hyperparams'])` and inspect the dropout_rate. A value of 0.9 means 90% of neurons are dropped every forward pass.",
+        7: "A PyTorch MLP has been training for 60 epochs but validation accuracy is stuck near random chance (40-50%). The loss is decreasing but very slowly — the model has severely limited effective capacity. Run `print(pipeline['pytorch_hyperparams'])` and inspect the dropout_rate. A value of 0.9 means 90% of neurons are dropped every forward pass.",
     },
     "missing_regularization": {
         1: "A PyTorch MLP is overfitting severely — training accuracy is above 97% but validation accuracy is only ~65%. The model has too many parameters relative to the training set and no regularization. Inspect `pipeline['pytorch_hyperparams']['weight_decay']` and `n_train_samples`.",

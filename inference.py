@@ -47,7 +47,7 @@ from actions import (  # noqa: E402
 TASKS = [
     {"name": "debug-sklearn",          "difficulty": 1, "seed": 42},  # sklearn RF, wrong_hyperparameter
     {"name": "debug-pytorch-vanishing","difficulty": 6, "seed": 42},  # PyTorch, wrong_activation (sigmoid)
-    {"name": "debug-pytorch-dropout",  "difficulty": 7, "seed": 42},  # PyTorch, excessive_dropout
+    {"name": "debug-pytorch-dropout",  "difficulty": 7, "seed": 7},   # PyTorch, excessive_dropout
     {"name": "debug-pytorch-lr",       "difficulty": 5, "seed": 42},  # PyTorch, wrong_learning_rate
 ]
 
