@@ -101,6 +101,7 @@ Respond with a single JSON object — no markdown, no explanation, no extra text
    {"action_type":"submit_diagnosis","bug_type":"wrong_activation","explanation":"..."}
    {"action_type":"submit_diagnosis","bug_type":"wrong_loss_function","explanation":"..."}
    {"action_type":"submit_diagnosis","bug_type":"missing_regularization","explanation":"..."}
+   {"action_type":"submit_diagnosis","bug_type":"excessive_dropout","explanation":"..."}
 
 === DEBUGGING STRATEGY ===
 
@@ -121,7 +122,8 @@ STEP 2 — Gather evidence based on model type:
     c. If activation='sigmoid' AND optimizer='sgd' → wrong_activation (vanishing) → fix_activation_function(relu)
     d. If loss_function='mse' → wrong_loss_function → fix_loss_function(crossentropy)
     e. If weight_decay=0.0 AND n_train_samples is small AND train-val gap > 0.15 → missing_regularization → fix_regularization(weight_decay=0.01)
-    e. inspect_data(describe) for completeness
+    f. If dropout_rate > 0.3 → excessive_dropout (too many neurons zeroed) → fix_dropout(dropout_rate=0.0)
+    g. inspect_data(describe) for completeness
 
 STEP 3 — Read the training diagnostics (PyTorch only):
   The observation includes:
@@ -152,6 +154,8 @@ STEP 4 — Diagnose and fix:
     → fix_loss_function(loss_function='crossentropy')
   - Train-val gap > 0.15 (train_acc >> val_acc) + weight_decay=0.0 + n_train_samples small → missing_regularization
     → fix_regularization(weight_decay=0.01)
+  - Accuracy near random chance (~50%) + pytorch_hyperparams shows dropout_rate ≥ 0.5 → excessive_dropout
+    → fix_dropout(dropout_rate=0.0)
 
 STEP 5 — Always call evaluate_model after fixing to verify improvement.
 
@@ -182,6 +186,14 @@ def obs_to_text(obs, pipeline: dict | None = None) -> str:
         if model_type == "pytorch":
             hp = pipeline.get("pytorch_hyperparams", {})
             parts.append(f"pytorch_hyperparams: {hp}")
+            # Alert on clearly pathological dropout
+            dropout_rate = float(hp.get("dropout_rate", 0.0))
+            if dropout_rate >= 0.5:
+                parts.append(
+                    f"DIAGNOSTIC: dropout_rate={dropout_rate} — {int(dropout_rate*100)}% of neurons "
+                    "are zeroed every forward pass. This is excessive and will prevent the model from "
+                    "learning. Fix: fix_dropout(dropout_rate=0.0). Diagnosis: excessive_dropout."
+                )
     train_acc = obs.current_metrics.train_accuracy
     val_acc = obs.current_metrics.val_accuracy
     gap = train_acc - val_acc
