@@ -34,14 +34,16 @@ crashing but produces wrong results due to a silently injected bug. The agent mu
 
 ### Bug categories
 
-| Bug | Description |
-|-----|-------------|
-| `wrong_hyperparameter` | Bad sklearn RF param (e.g. `min_samples_split=400`) causes underfitting |
-| `class_imbalance` | 92% majority class — accuracy looks fine but F1 is broken |
-| `data_leakage` | A `target_encoded` column leaks the label into features |
-| `wrong_learning_rate` | **PyTorch MLP** with `lr=50.0` — gradients diverge, near-chance accuracy |
+| Bug | Model | Description |
+|-----|-------|-------------|
+| `wrong_hyperparameter` | sklearn RF | Bad param (e.g. `min_samples_split=400`) causes severe underfitting |
+| `class_imbalance` | sklearn RF | 92% majority class — accuracy looks fine but F1 is broken |
+| `data_leakage` | sklearn RF | A `target_encoded` column leaks the label into features |
+| `wrong_learning_rate` | **PyTorch MLP** | `lr=50.0` → gradients diverge immediately, near-chance accuracy |
+| `wrong_activation` | **PyTorch MLP** | 4-layer sigmoid network → vanishing gradients, ~50-65% accuracy |
+| `wrong_loss_function` | **PyTorch MLP** | MSE loss on one-hot targets instead of CrossEntropy → weak gradient signal |
 
-Four difficulty levels progress from obvious single bugs (D1) to multi-bug PyTorch scenarios (D5).
+Seven difficulty levels — D1–D4 are sklearn, D5–D7 are PyTorch-native.
 
 ---
 
@@ -120,26 +122,29 @@ All rewards are clamped to **(0.01, 0.99)** — never exactly 0 or 1 as required
 
 ## Difficulty Levels
 
-| Level | Label | Model | Bugs | Hints |
-|-------|-------|-------|------|-------|
-| 1 | Easy | sklearn RF | 1 (obvious) | Full — names the symptom clearly |
-| 2 | Medium | sklearn RF | 1 (subtle) | Partial — bug category mentioned |
-| 3 | Hard | sklearn RF | 2 (mixed) | Minimal — only bug count |
-| 4 | Expert | sklearn RF | 2 + obfuscated columns | None |
-| 5 | PyTorch | PyTorch MLP | 1 (bad LR) | Hints to check optimizer config |
+| Level | Label | Model | Bug | Hint |
+|-------|-------|-------|-----|------|
+| 1 | Easy | sklearn RF | wrong_hyperparameter | Full — names the symptom |
+| 2 | Medium | sklearn RF | class_imbalance | Partial |
+| 3 | Hard | sklearn RF | data_leakage + 1 secondary | Minimal |
+| 4 | Expert | sklearn RF | wrong_hyperparameter + obfuscated cols | None |
+| 5 | PyTorch-LR | PyTorch MLP | wrong_learning_rate (lr=50) | Check optimizer config |
+| 6 | PyTorch-Activation | PyTorch MLP (4-layer) | wrong_activation (sigmoid) | Check activation function |
+| 7 | PyTorch-Loss | PyTorch MLP | wrong_loss_function (MSE) | Check loss function |
 
 ---
 
 ## Inference Script
 
-`inference.py` uses the OpenAI-compatible API to run an LLM agent through all four tasks:
+`inference.py` uses the OpenAI-compatible API to run an LLM agent through all four tasks.
+**3 of 4 tasks use PyTorch** — directly relevant to the hackathon theme.
 
 | Task | Difficulty | Model | Bug |
 |------|-----------|-------|-----|
-| debug-easy | 1 | sklearn RF | wrong_hyperparameter |
-| debug-medium | 2 | sklearn RF | class_imbalance |
-| debug-hard | 3 | sklearn RF | data_leakage |
-| debug-pytorch | 5 | PyTorch MLP | wrong_learning_rate |
+| debug-sklearn | 1 | sklearn RF | wrong_hyperparameter (`min_samples_split=400`) |
+| debug-pytorch-vanishing | 6 | PyTorch MLP | wrong_activation (sigmoid → vanishing gradients) |
+| debug-pytorch-loss | 7 | PyTorch MLP | wrong_loss_function (MSE instead of CrossEntropy) |
+| debug-pytorch-lr | 5 | PyTorch MLP | wrong_learning_rate (`lr=50.0` → divergence) |
 
 ```bash
 HF_TOKEN=<your-key> python inference.py
