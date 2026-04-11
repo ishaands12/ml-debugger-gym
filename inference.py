@@ -141,7 +141,7 @@ STEP 4 — Diagnose and fix:
   - Low train_accuracy (sklearn) → wrong_hyperparameter
     → check pipeline['hyperparams'] for max_depth=1, n_estimators=1, min_samples_split>50
     → fix the bad param: set_hyperparameter(key=<bad_key>, value=<good_value>)
-    → try: min_samples_split→2, max_depth→10, n_estimators→100
+    → try: min_samples_split→2, max_depth→None (unlimited), n_estimators→100
   - High accuracy, low F1, skewed class dist → class_imbalance
     → resample_class_balance(strategy=oversample)
   - Suspiciously high accuracy + highly correlated column → data_leakage
@@ -375,13 +375,14 @@ def _make_fallback_seq(difficulty: int):
     ]
 
     if bug == "wrong_hyperparameter":
-        # D1/seed=42: min_samples_split=400 — fix all three to be safe
+        # D1/seed=42: min_samples_split=400 — fix all three to be safe.
+        # max_depth→None (not 10!) so we restore unlimited depth without capping.
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="set_hyperparameter",
             parameters={"key": "min_samples_split", "value": 2}))
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="set_hyperparameter",
-            parameters={"key": "max_depth", "value": 10}))
+            parameters={"key": "max_depth", "value": None}))
         seq.append(lambda obs: ApplyFixAction(
             action_type="apply_fix", fix_type="set_hyperparameter",
             parameters={"key": "n_estimators", "value": 100}))
